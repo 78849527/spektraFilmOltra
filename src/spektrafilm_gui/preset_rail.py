@@ -251,10 +251,11 @@ class PresetRail(QWidget):
         root.addLayout(self._brand_row)
 
         self._scroll = DampedScrollArea()
+        self._scroll.setObjectName('railScroll')
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QFrame.NoFrame)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._list = QWidget()
         self._list_layout = QVBoxLayout(self._list)
         self._list_layout.setContentsMargins(0, 2, 0, 2)

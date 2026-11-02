@@ -328,7 +328,7 @@ def gui_state_from_params(
             ),
             display=DisplayState(
                 use_display_transform=True,
-                gray_18_canvas=True,
+                gray_18_canvas=False,
                 output_interpolation='spline36',
                 white_padding=0.03,
                 settings=SettingsParams(preview_max_size=params.settings.preview_max_size),

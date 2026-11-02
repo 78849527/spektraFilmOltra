@@ -44,6 +44,30 @@ def test_library_page_lists_photos_and_stats(tmp_path: Path) -> None:
     page.deleteLater()
 
 
+def test_photo_card_shows_grade_badge_only_with_recipe(tmp_path: Path) -> None:
+    page, store = _page(tmp_path, count=1)
+    item = store.all_items()[0]
+    card = page._cards[item.id]
+
+    store.update_item(
+        item.id,
+        save=True,
+        state={'grade': {'schema': 1, 'recipe': {'basic': {'exposure': 0.5}}}},
+    )
+    page.refresh_item(item.id)
+    assert card._grade_badge.isHidden() is False
+
+    store.update_item(
+        item.id,
+        save=True,
+        state={'grade': {'schema': 1, 'handoff': {'path': '/tmp/handoff.tif'}}},
+    )
+    page.refresh_item(item.id)
+    assert card._grade_badge.isHidden() is True
+
+    page.deleteLater()
+
+
 def test_favorite_filter_shows_only_favorites(tmp_path: Path) -> None:
     page, store = _page(tmp_path)
     favorite = store.all_items()[0]

@@ -15,6 +15,35 @@ from spektrafilm_gui import app_paths
 
 EXPORT_FORMATS = ('JPEG', 'PNG', 'TIFF', 'EXR')
 TEMP_SUFFIX = '{name}_spektrafilm'
+DIRECT_EXPORT_LONG_EDGE_RATIO = 0.9
+DIRECT_EXPORT_PNG_COMPRESSION = 9
+
+
+@dataclass(frozen=True, slots=True)
+class DirectExportSettings:
+    """箭头菜单「直接导出」的固定配置，与完整导出面板互不覆盖。
+
+    PNG 没有「质量」参数，这里用 90% 长边 + 最高压缩表达「90% 质量」。
+    """
+
+    format: str = 'PNG'
+    png_compression: int = DIRECT_EXPORT_PNG_COMPRESSION
+    bit_depth: int = 8
+    long_edge_ratio: float = DIRECT_EXPORT_LONG_EDGE_RATIO
+    filename_template: str = TEMP_SUFFIX
+
+    def to_export_settings(self, image_long_edge: int) -> ExportSettings:
+        long_edge = 0
+        if int(image_long_edge) > 0:
+            long_edge = max(1, int(round(int(image_long_edge) * self.long_edge_ratio)))
+        return ExportSettings(
+            format=self.format,
+            png_compression=self.png_compression,
+            bit_depth=self.bit_depth,
+            long_edge=long_edge,
+            directory='',
+            filename_template=self.filename_template,
+        ).normalized()
 
 
 @dataclass(slots=True)
@@ -91,6 +120,9 @@ def save_export_settings(settings: ExportSettings) -> None:
 
 
 __all__ = [
+    'DIRECT_EXPORT_LONG_EDGE_RATIO',
+    'DIRECT_EXPORT_PNG_COMPRESSION',
+    'DirectExportSettings',
     'EXPORT_FORMATS',
     'ExportSettings',
     'export_settings_path',

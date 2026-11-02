@@ -14,6 +14,14 @@ from qtpy import QtCore, QtWidgets
 from spektrafilm_gui import motion
 from spektrafilm_gui.editor_page import EditorPage
 from spektrafilm_gui.export_dialog import edit_export_settings
+from spektrafilm_gui.grade_page import GradePage
+from spektrafilm_gui.handoff import (
+    handoff_fingerprint,
+    handoff_is_current,
+    handoff_path,
+    has_grade_recipe,
+    write_handoff,
+)
 from spektrafilm_gui.library_page import LibraryPage
 from spektrafilm_gui.library_store import LibraryItem, LibraryStore, is_raw_image
 from spektrafilm_gui.napari_layout import (
@@ -28,6 +36,7 @@ from spektrafilm_gui.state import PROJECT_DEFAULT_GUI_STATE
 from spektrafilm_gui.state_bridge import apply_gui_state, collect_gui_state
 from spektrafilm_gui.persistence import gui_state_from_dict, gui_state_to_dict
 from spektrafilm_gui.theme import APP_STYLE_SHEET
+from spektrafilm_gui.theme_library import LIBRARY_STYLE_SHEET
 from spektrafilm_gui.theme_shell import SHELL_STYLE_SHEET
 from spektrafilm_gui.ui_names import film_display_name, paper_display_name
 from spektrafilm_gui.widget_primitives import platform_default_font
@@ -61,18 +70,21 @@ class WorkspaceWindow(QMainWindow):
         self.store = store or LibraryStore()
         self._active_item_id = ''
         self._drop_overlay: QtWidgets.QWidget | None = None
+        self._pending_handoff: tuple[str, str, Path] | None = None
 
         self.setWindowTitle('Spektrafilm')
         self.resize(1460, 940)
         self.setMinimumSize(1180, 760)
         self.setFont(platform_default_font())
-        self.setStyleSheet(APP_STYLE_SHEET + '\n\n' + SHELL_STYLE_SHEET)
+        self.setStyleSheet(
+            '\n\n'.join((APP_STYLE_SHEET, SHELL_STYLE_SHEET, LIBRARY_STYLE_SHEET))
+        )
         self.setAcceptDrops(True)
 
         viewer_widget = take_viewer_widget(viewer)
         configure_napari_chrome(
             viewer,
-            gray_18_canvas=bool(getattr(widgets.display.gray_18_canvas, 'value', True)),
+            gray_18_canvas=bool(getattr(widgets.display.gray_18_canvas, 'value', False)),
         )
         set_host_window(viewer, self)
 
@@ -85,9 +97,11 @@ class WorkspaceWindow(QMainWindow):
             controller,
             thumbnails=self.thumbnails,
         )
+        self.grade_page = GradePage()
         self._stack = QStackedWidget()
         self._stack.addWidget(self.library_page)
         self._stack.addWidget(self.editor_page)
+        self._stack.addWidget(self.grade_page)
         self.setCentralWidget(self._stack)
 
         status = QStatusBar()
@@ -120,7 +134,8 @@ class WorkspaceWindow(QMainWindow):
         self.library_page.photos_imported.connect(self._on_photos_imported)
 
         self.editor_page.back_requested.connect(self.show_library)
-        self.editor_page.export_requested.connect(self._controller.request_export)
+        self.editor_page.grade_requested.connect(self._on_grade_requested)
+        self.editor_page.direct_export_requested.connect(self._request_direct_export)
         self.editor_page.export_settings_requested.connect(self._on_export_settings)
         self.editor_page.quick_preview_requested.connect(self._controller.run_preview)
         self.editor_page.scan_requested.connect(self._controller.run_scan)
@@ -133,6 +148,7 @@ class WorkspaceWindow(QMainWindow):
         self.editor_page.profile_changed.connect(self._on_deck_profile_changed)
         self.editor_page.quick_changed.connect(self._schedule_persist)
         self.editor_page.strip_item_selected.connect(self.open_item)
+        self.grade_page.back_requested.connect(self.show_editor)
         set_scale = getattr(self._controller, 'set_preview_render_scale', None)
         if callable(set_scale):
             self.editor_page.preview_scale_changed.connect(set_scale)
@@ -165,6 +181,104 @@ class WorkspaceWindow(QMainWindow):
         motion.fade_in(self.library_page, duration=200, start=0.6)
         self.setWindowTitle('Spektrafilm')
         self.statusBar().showMessage('照片库', 2500)
+
+    def show_editor(self) -> None:
+        if not self._active_item_id or self._stack.currentIndex() != 2:
+            return
+        self._stack.setCurrentIndex(1)
+        self.setWindowTitle('Spektrafilm')
+        self._show_status('显影台')
+
+    def _request_direct_export(self) -> None:
+        request = getattr(self._controller, 'request_direct_export', None)
+        if callable(request):
+            request()
+
+    def _on_grade_requested(self) -> None:
+        """进入调色台：交接图有效就直接进，否则先跑一次全尺寸显影。"""
+        if not self._active_item_id:
+            return
+        if self._controller.is_simulating():
+            self._show_status('显影完成后再调色')
+            return
+        item = self.store.item(self._active_item_id)
+        if item is None:
+            return
+
+        self._persist_active_state()
+        item = self.store.item(self._active_item_id) or item
+        state_data = item.state if isinstance(item.state, dict) else None
+        fingerprint = handoff_fingerprint(state_data)
+        if handoff_is_current(state_data, fingerprint):
+            self._open_grade_page(item)
+            return
+
+        path = handoff_path(item.id)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            self._show_status(f'无法创建调色目录：{exc}')
+            return
+        start = getattr(self._controller, 'start_handoff', None)
+        if not callable(start):
+            self._show_status('当前版本无法生成调色交接图')
+            return
+        self._pending_handoff = (item.id, fingerprint, path)
+        if not start(str(path), self._on_handoff_finished):
+            self._pending_handoff = None
+            self._show_status('当前无法生成调色交接图')
+
+    def _on_handoff_finished(self, result, error) -> None:
+        pending = self._pending_handoff
+        self._pending_handoff = None
+        self.editor_page.set_simulation_busy(False)
+        if pending is None:
+            return
+        if error is not None or result is None:
+            self._show_status(f'调色交接失败：{error}')
+            QMessageBox.warning(self, '调色', f'交接图生成失败。\n\n{error}')
+            return
+
+        item_id, fingerprint, path = pending
+        float_image = getattr(result, 'float_image', None)
+        height = width = 0
+        shape = getattr(float_image, 'shape', None)
+        if shape is not None and len(shape) >= 2:
+            height, width = int(shape[0]), int(shape[1])
+
+        item = self.store.item(item_id)
+        if item is None:
+            return
+        state_data = dict(item.state) if isinstance(item.state, dict) else {}
+        state_data = write_handoff(
+            state_data,
+            path=path,
+            fingerprint=fingerprint,
+            width=width,
+            height=height,
+        )
+        updated = self.store.update_item(item_id, save=True, state=state_data)
+        if updated is not None:
+            self.library_page.refresh_item(updated.id)
+            item = updated
+        self.editor_page.set_grade_recipe(has_grade_recipe(item.state))
+        self._open_grade_page(item)
+        self._show_status('调色交接图已生成')
+
+    def _open_grade_page(self, item: LibraryItem) -> None:
+        self.grade_page.set_photo(item)
+        preview = None
+        current = getattr(self._controller, 'current_output_display_image', None)
+        if callable(current):
+            try:
+                preview = current()
+            except (AttributeError, TypeError, ValueError):
+                preview = None
+        self.grade_page.set_preview(preview)
+        self._stack.setCurrentIndex(2)
+        self.setWindowTitle('Spektrafilm · 调色台')
+        motion.fade_in(self.grade_page, duration=200, start=0.6)
+        self._show_status(f'进入调色台 · {item.name}')
 
     def open_item(self, item_id: str) -> None:
         if self._controller.is_simulating():
@@ -207,6 +321,8 @@ class WorkspaceWindow(QMainWindow):
         self.editor_page.set_quick_state(quick_raw)
         display_item = self._display_item(item, state)
         self.editor_page.set_photo(display_item, self._strip_items_for(display_item))
+        self.editor_page.set_grade_recipe(has_grade_recipe(item.state))
+        self.editor_page.set_grade_ready(False)
         self.editor_page.set_histogram(None)
         self.library_page.set_current_item(item_id)
 
@@ -282,6 +398,7 @@ class WorkspaceWindow(QMainWindow):
         fingerprint = copy.deepcopy(data)
         fingerprint.pop('display', None)
         fingerprint.pop('quick', None)
+        fingerprint.pop('grade', None)
         simulation = fingerprint.get('simulation')
         if isinstance(simulation, dict):
             for key in ('auto_preview', 'scan_film', 'saving_color_space', 'saving_cctf_encoding'):
@@ -304,6 +421,11 @@ class WorkspaceWindow(QMainWindow):
         state = collect_gui_state(widgets=self._widgets)
         data = gui_state_to_dict(state)
         data['quick'] = self.editor_page.quick_state_dict()
+        existing = self.store.item(self._active_item_id)
+        existing_state = existing.state if existing is not None and isinstance(existing.state, dict) else {}
+        if isinstance(existing_state.get('grade'), dict):
+            # 调色配方与交接图独立于显影参数，不能被每次防抖保存冲掉。
+            data['grade'] = copy.deepcopy(existing_state['grade'])
         try:
             default_data = gui_state_to_dict(load_default_gui_state())
         except (OSError, ValueError, TypeError):
@@ -323,6 +445,7 @@ class WorkspaceWindow(QMainWindow):
         if updated is not None:
             self.editor_page.top_bar.set_photo(updated)
             self.editor_page.preview.set_photo_info(updated)
+            self.editor_page.set_grade_recipe(has_grade_recipe(updated.state))
             try:
                 self.library_page.refresh_item(updated.id)
             except (AttributeError, RuntimeError):
@@ -334,6 +457,7 @@ class WorkspaceWindow(QMainWindow):
 
     def _on_simulation_finished(self, result) -> None:
         self.editor_page.set_simulation_busy(False)
+        self.editor_page.set_grade_ready(True)
         try:
             self.editor_page.set_histogram(self._controller.current_output_display_image())
         except (AttributeError, TypeError, ValueError):

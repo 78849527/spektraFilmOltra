@@ -47,6 +47,25 @@ TOP_BAR_HEIGHT = 48
 SECTION_HEADER_HEIGHT = 36
 ROW_HEIGHT = 44
 
+# ── 间距阶梯（4 的倍数，桌面密度）───────────────────────────────
+SPACE_1 = 4
+SPACE_2 = 8
+SPACE_3 = 12
+SPACE_4 = 16
+SPACE_5 = 24
+SPACE_6 = 32
+
+# ── 控件尺寸 ────────────────────────────────────────────────────
+CONTROL_HEIGHT = 30
+CONTROL_HEIGHT_SMALL = 26
+
+# ── 字号阶梯 ────────────────────────────────────────────────────
+FONT_TITLE = 21
+FONT_SECTION = 13
+FONT_BODY = 12
+FONT_CAPTION = 11
+FONT_MICRO = 10
+
 
 def rgba(hex_color: str, alpha: float) -> str:
     """#RRGGBB + 0-1 透明度 → #AARRGGBB（Qt 顺序）。"""

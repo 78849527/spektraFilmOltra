@@ -164,8 +164,15 @@ def _draw(painter: Painter, name: str, size: float) -> None:
         painter.drawPath(path)
     elif name == 'dots':
         for x in (0.26, 0.5, 0.74):
-            painter.setBrush(Color(color))
+            painter.setBrush(painter.pen().color())
             painter.drawEllipse(QPointF(s * x, s * 0.5), 1.3, 1.3)
+    elif name == 'grade':
+        # 调色：三条推子 + 手柄，对应调色台的参数面板
+        for y, x in ((0.28, 0.62), (0.5, 0.36), (0.72, 0.58)):
+            painter.drawLine(QPointF(s * 0.18, s * y), QPointF(s * 0.82, s * y))
+            painter.setBrush(Color(painter.pen().color()))
+            painter.drawEllipse(QPointF(s * x, s * y), s * 0.075, s * 0.075)
+            painter.setBrush(Qt.NoBrush)
     elif name == 'film_frame':
         # 空态胶片框：外框 + 两侧齿孔 + 黄铜光圈（唯一的双色图标）
         frame = QRectF(s * 0.16, s * 0.05, s * 0.68, s * 0.9)

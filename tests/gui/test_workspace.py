@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 from qtpy import QtGui, QtTest, QtWidgets
 
@@ -42,6 +43,8 @@ class _FakeController:
         self.loaded_input: list[str] = []
         self.loaded_raw: list[str] = []
         self.export_calls = 0
+        self.direct_export_calls = 0
+        self.handoff_calls: list[str] = []
         self.preview_calls = 0
         self.profile_calls: list[str] = []
         self.restore_calls = 0
@@ -76,6 +79,21 @@ class _FakeController:
 
     def request_export(self) -> None:
         self.export_calls += 1
+
+    def request_direct_export(self) -> None:
+        self.direct_export_calls += 1
+
+    def current_output_display_image(self):
+        return np.zeros((6, 8, 3), dtype=np.uint8)
+
+    def start_handoff(self, path: str, callback=None) -> bool:
+        self.handoff_calls.append(path)
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b'handoff')
+        if callback is not None:
+            callback(SimpleNamespace(float_image=np.zeros((12, 9, 3))), None)
+        return True
 
     def save_output_layer(self) -> None:
         return
@@ -207,14 +225,15 @@ def test_workspace_persists_quick_intent(tmp_path: Path) -> None:
     window.close()
 
 
-def test_workspace_export_and_favorite(tmp_path: Path) -> None:
+def test_workspace_direct_export_and_favorite(tmp_path: Path) -> None:
     window, store, controller = _window(tmp_path)
     item = store.all_items()[0]
     window.open_item(item.id)
     _app().processEvents()
 
-    window.editor_page.top_bar._export_button.click()
-    assert controller.export_calls == 1
+    menu = window.editor_page.top_bar._export_menu.menu()
+    menu.actions()[0].trigger()
+    assert controller.direct_export_calls == 1
 
     window.editor_page.top_bar._favorite.setChecked(True)
     _app().processEvents()
@@ -223,6 +242,37 @@ def test_workspace_export_and_favorite(tmp_path: Path) -> None:
     window._on_film_selected('kodak_portra_400')
     assert window._widgets.simulation.film_stock.value == 'kodak_portra_400'
     assert controller.profile_calls == ['kodak_portra_400']
+
+    window.close()
+
+
+def test_workspace_generates_handoff_and_enters_grade_page(tmp_path: Path, monkeypatch) -> None:
+    handoff_root = tmp_path / 'projects'
+    monkeypatch.setattr(
+        workspace_module,
+        'handoff_path',
+        lambda item_id: handoff_root / item_id / 'handoff.tif',
+    )
+    window, store, controller = _window(tmp_path)
+    item = store.all_items()[0]
+    window.open_item(item.id)
+    _app().processEvents()
+
+    window._on_grade_requested()
+    _app().processEvents()
+
+    assert window._stack.currentIndex() == 2
+    assert controller.handoff_calls == [str(handoff_root / item.id / 'handoff.tif')]
+    saved = store.item(item.id)
+    assert saved is not None and saved.state is not None
+    handoff = saved.state['grade']['handoff']
+    assert handoff['format'] == 'tiff16-prophoto-linear'
+    assert handoff['width'] == 9
+    assert handoff['height'] == 12
+
+    window.grade_page.back_requested.emit()
+    _app().processEvents()
+    assert window._stack.currentIndex() == 1
 
     window.close()
 

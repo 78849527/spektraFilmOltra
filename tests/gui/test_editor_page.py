@@ -149,10 +149,22 @@ def test_editor_page_wires_top_bar_and_filmstrip(tmp_path: Path) -> None:
     assert item.id in page.filmstrip._thumbs
     assert page.preset_rail._current_film == 'kodak_portra_400'
 
-    exported: list[bool] = []
-    page.export_requested.connect(lambda: exported.append(True))
-    page.top_bar._export_button.click()
-    assert exported == [True]
+    graded: list[bool] = []
+    page.grade_requested.connect(lambda: graded.append(True))
+    page.set_grade_ready(True)
+    page.top_bar._grade_button.click()
+    assert graded == [True]
+
+    page.set_simulation_busy(True)
+    assert page.top_bar._grade_button.isEnabled() is False
+    assert '显影完成后再调色' in page.top_bar._grade_button.toolTip()
+    page.set_simulation_busy(False)
+    assert page.top_bar._grade_button.isEnabled() is True
+
+    page.set_grade_recipe(True)
+    assert page.top_bar._grade_dot.isHidden() is False
+    page.set_grade_recipe(False)
+    assert page.top_bar._grade_dot.isHidden() is True
 
     page.top_bar._favorite.setChecked(True)
     _app().processEvents()

@@ -14,7 +14,6 @@ from spektrafilm_gui.theme_oflim import (
     DANGER,
     HAIRLINE,
     HAIRLINE_STRONG,
-    R_LARGE,
     R_MEDIUM,
     R_SMALL,
     SURFACE_0,
@@ -39,87 +38,31 @@ QWidget#inspectorPanel {{
     color: {TEXT_1};
 }}
 
-QWidget#libraryHeader {{
-    background: {SURFACE_0};
-    border-bottom: 1px solid {HAIRLINE};
-}}
+/* 照片库的完整视觉规范在 theme_library，这里只保留与编辑页共享的壳层 */
 
-QScrollArea#libraryScroll,
-QWidget#libraryBody {{
+/* 主页与预设台的滚动一律靠滚轮/触控板，滚动条本身不占视觉 */
+QScrollArea#railScroll QScrollBar:vertical,
+QScrollArea#filmstripScroll QScrollBar:horizontal {{
+    width: 0px;
+    height: 0px;
     background: transparent;
     border: none;
 }}
-QScrollArea#libraryScroll > QWidget > QWidget {{ background: transparent; }}
-QWidget#photoGrid {{ background: transparent; }}
 
-QLabel#libraryTitle {{
-    color: {TEXT_1};
-    font-size: 26px;
-    font-weight: 500;
-    letter-spacing: 0.2px;
+/* 滚动区视口不吃调色板底色，永远透出页面底 */
+QScrollArea#railScroll,
+QScrollArea#railScroll > QWidget > QWidget,
+QScrollArea#filmstripScroll,
+QScrollArea#filmstripScroll > QWidget > QWidget {{
+    background: transparent;
+    border: none;
 }}
 
-QLabel#librarySubtitle,
-QLabel#librarySectionCount,
-QLabel#photoMeta,
-QLabel#folderCount,
 QLabel#presetMeta,
 QLabel#editorMeta {{
     color: {TEXT_3};
     font-size: 11px;
 }}
-
-QLabel#librarySectionTitle {{
-    color: {TEXT_1};
-    font-size: 18px;
-    font-weight: 500;
-}}
-
-QLabel#folderName {{
-    color: {TEXT_1};
-    font-size: 12px;
-    font-weight: 500;
-}}
-
-QLabel#photoName {{
-    color: {TEXT_1};
-    font-size: 12px;
-}}
-
-QPushButton#primaryAction {{
-    background: transparent;
-    color: {ACCENT};
-    border: 1px solid {rgba(ACCENT, 0.55)};
-    border-radius: {R_SMALL}px;
-    padding: 0px 16px;
-    min-height: 30px;
-    max-height: 30px;
-    font-size: 12px;
-    font-weight: 500;
-}}
-QPushButton#primaryAction:hover {{ background: {rgba(ACCENT, 0.10)}; border-color: {rgba(ACCENT, 0.8)}; }}
-QPushButton#primaryAction:pressed {{ background: {rgba(ACCENT, 0.16)}; border-color: {rgba(ACCENT, 0.8)}; }}
-QPushButton#primaryAction:focus {{ border-color: {rgba(ACCENT, 0.8)}; }}
-QPushButton#primaryAction:disabled {{ background: transparent; color: {rgba(ACCENT, 0.32)}; border-color: {rgba(ACCENT, 0.2)}; }}
-
-QPushButton#secondaryAction {{
-    background: transparent;
-    color: {TEXT_2};
-    border: 1px solid {HAIRLINE_STRONG};
-    border-radius: {R_SMALL}px;
-    padding: 0px 16px;
-    min-height: 30px;
-    max-height: 30px;
-    font-size: 12px;
-    font-weight: 500;
-}}
-QPushButton#secondaryAction:hover {{
-    background: {rgba('#FFFFFF', 0.04)};
-    border-color: {rgba('#FFFFFF', 0.22)};
-    color: {TEXT_1};
-}}
-QPushButton#secondaryAction:pressed {{ background: {rgba('#FFFFFF', 0.02)}; }}
-QPushButton#secondaryAction:disabled {{ background: transparent; color: {rgba('#FFFFFF', 0.22)}; }}
 
 QPushButton#ghostAction {{
     background: transparent;
@@ -165,7 +108,6 @@ QPushButton#favoriteButton {{
 QPushButton#favoriteButton:hover {{ background: {rgba('#FFFFFF', 0.08)}; }}
 QPushButton#favoriteButton:checked {{ background: {rgba(ACCENT, 0.16)}; }}
 
-QLineEdit#librarySearch,
 QLineEdit#presetSearch {{
     background: {SURFACE_2};
     color: {TEXT_1};
@@ -178,123 +120,10 @@ QLineEdit#presetSearch {{
     selection-background-color: {ACCENT};
     selection-color: {ACCENT_ON};
 }}
-QLineEdit#librarySearch:focus,
 QLineEdit#presetSearch:focus {{ border-color: {rgba(ACCENT, 0.45)}; }}
 
-QComboBox#librarySort {{
-    background: {SURFACE_2};
-    color: {TEXT_2};
-    border: 1px solid {HAIRLINE};
-    border-radius: {R_SMALL}px;
-    padding: 0px 10px;
-    min-height: 30px;
-    max-height: 30px;
-    font-size: 12px;
-}}
-QComboBox#librarySort:hover {{ color: {TEXT_1}; border-color: {HAIRLINE_STRONG}; }}
-QComboBox#librarySort::drop-down {{ border: none; width: 18px; }}
-QComboBox#librarySort QAbstractItemView {{
-    background: {SURFACE_2};
-    color: {TEXT_1};
-    border: 1px solid {HAIRLINE_STRONG};
-    selection-background-color: {SURFACE_4};
-    padding: 4px;
-}}
-
-QPushButton#filterChip {{
-    background: transparent;
-    color: {TEXT_3};
-    border: 1px solid transparent;
-    border-radius: 13px;
-    padding: 0px 13px;
-    min-height: 26px;
-    max-height: 26px;
-    font-size: 12px;
-}}
-QPushButton#filterChip:hover {{ color: {TEXT_1}; background: {rgba('#FFFFFF', 0.05)}; }}
-QPushButton#filterChip:checked {{
-    color: {TEXT_1};
-    background: {SURFACE_3};
-    border-color: {HAIRLINE_STRONG};
-}}
-
-QFrame#folderCard {{
-    background: {SURFACE_2};
-    border: 1px solid {HAIRLINE};
-    border-radius: {R_MEDIUM}px;
-}}
-QFrame#folderCard:hover {{
-    background: {SURFACE_3};
-    border-color: {HAIRLINE_STRONG};
-}}
-QFrame#folderCard[selected="true"] {{
-    border-color: {rgba(ACCENT, 0.75)};
-    background: {SURFACE_3};
-}}
-
-QFrame#photoCard {{
-    background: transparent;
-    border: none;
-}}
-QFrame#photoCard[selected="true"] QLabel#photoName {{ color: {ACCENT}; }}
-QFrame#photoCard[missing="true"] QLabel#photoName {{ color: {TEXT_3}; }}
-
-QLabel#photoThumb {{
-    background: {SURFACE_2};
-    border: 1px solid transparent;
-    border-radius: 10px;
-}}
-QFrame#photoCard:hover QLabel#photoThumb {{
-    background: {SURFACE_3};
-    border-color: {HAIRLINE_STRONG};
-}}
-QFrame#photoCard[selected="true"] QLabel#photoThumb {{
-    border-color: {rgba(ACCENT, 0.85)};
-}}
-
-QPushButton#starButton {{
-    background: {rgba(SURFACE_1, 0.92)};
-    border: none;
-    border-radius: 11px;
-    padding: 0px;
-    min-width: 22px;
-    max-width: 22px;
-    min-height: 22px;
-    max-height: 22px;
-}}
-QPushButton#starButton:hover {{ background: {SURFACE_3}; }}
-QPushButton#colorButton {{
-    background: {rgba(SURFACE_1, 0.92)};
-    border: none;
-    border-radius: 11px;
-    padding: 0px;
-    min-width: 22px;
-    max-width: 22px;
-    min-height: 22px;
-    max-height: 22px;
-}}
-
-QWidget#emptyState {{
-    background: transparent;
-}}
-QFrame#emptyCard {{
-    background: {SURFACE_1};
-    border: 1px solid {HAIRLINE_STRONG};
-    border-radius: {R_LARGE}px;
-}}
-QWidget#emptyButtons {{
-    background: transparent;
-}}
-QLabel#emptyTitle {{ color: {TEXT_1}; font-size: 17px; font-weight: 500; }}
-QLabel#emptyHint {{ color: {TEXT_3}; font-size: 12px; }}
-QLabel#emptyFormats {{
-    color: {TEXT_3};
-    font-size: 11px;
-    letter-spacing: 0.2px;
-}}
-
 QWidget#editorTopBar {{
-    background: {SURFACE_1};
+    background: {SURFACE_0};
     border-bottom: 1px solid {HAIRLINE};
 }}
 QLabel#editorTitle {{ color: {TEXT_1}; font-size: 14px; font-weight: 500; }}
@@ -317,34 +146,44 @@ QPushButton#compactBack:pressed {{ background: {SURFACE_1}; }}
 QWidget#previewStage {{
     background: {SURFACE_0};
 }}
-/* 画布浮动层：信息与工具不做通栏条，悬浮在画面上 */
+/* 画布浮动层：一条工具条 + 一行纯文字信息，不再有多个盒子 */
 QLabel#previewChip {{
     background: {rgba(SURFACE_1, 0.92)};
     color: {TEXT_2};
     border: 1px solid {HAIRLINE_STRONG};
     border-radius: 12px;
-    padding: 4px 10px;
+    padding: 4px 11px;
     font-size: 11px;
 }}
 QLabel#floatInfo {{
-    background: {rgba(SURFACE_1, 0.92)};
-    color: {TEXT_2};
+    background: transparent;
+    border: none;
+    color: {TEXT_3};
+    font-size: 11px;
+}}
+QWidget#floatBar {{
+    background: {rgba(SURFACE_1, 0.94)};
     border: 1px solid {HAIRLINE_STRONG};
     border-radius: 12px;
-    padding: 5px 12px;
-    font-size: 12px;
 }}
-QWidget#floatToolbar {{
-    background: {rgba(SURFACE_1, 0.92)};
-    border: 1px solid {HAIRLINE_STRONG};
-    border-radius: 15px;
+QPushButton#scalePill {{
+    background: transparent;
+    color: {TEXT_2};
+    border: none;
+    border-radius: 9px;
+    padding: 0px 8px;
+    min-height: 26px;
+    max-height: 26px;
+    font-size: 11px;
 }}
-QWidget#floatToolbar QPushButton#iconButton {{
+QPushButton#scalePill:hover {{ color: {TEXT_1}; background: {rgba('#FFFFFF', 0.07)}; }}
+QPushButton#scalePill::menu-indicator {{ image: none; width: 0px; }}
+QWidget#floatBar QPushButton#iconButton {{
     padding: 0px;
     min-height: 26px;
     max-height: 26px;
 }}
-QWidget#floatToolbar QPushButton#ghostAction {{
+QWidget#floatBar QPushButton#ghostAction {{
     padding: 0px 8px;
 }}
 QFrame#floatDivider {{
@@ -353,7 +192,7 @@ QFrame#floatDivider {{
 }}
 
 QWidget#presetRail {{
-    background: {SURFACE_1};
+    background: {SURFACE_0};
     border-right: 1px solid {HAIRLINE};
 }}
 QPushButton#modeTab {{
@@ -397,8 +236,8 @@ QLineEdit#presetSearch {{
     border: 1px solid {HAIRLINE};
     border-radius: 8px;
     padding: 0px 10px;
-    min-height: 32px;
-    max-height: 32px;
+    min-height: 30px;
+    max-height: 30px;
     font-size: 12px;
     selection-background-color: {ACCENT};
     selection-color: {ACCENT_ON};
@@ -423,7 +262,7 @@ QLabel#presetBrand {{
 }}
 
 QWidget#inspectorPanel {{
-    background: {SURFACE_1};
+    background: {SURFACE_0};
     border-left: 1px solid {HAIRLINE};
 }}
 QWidget#histogramCard {{
@@ -467,7 +306,7 @@ QPushButton#segmentButton:checked {{
 }}
 
 QWidget#filmstrip {{
-    background: {SURFACE_1};
+    background: {SURFACE_0};
     border-top: 1px solid {HAIRLINE};
 }}
 QFrame#filmThumb {{
@@ -478,54 +317,52 @@ QFrame#filmThumb {{
 QFrame#filmThumb:hover {{ border-color: {HAIRLINE_STRONG}; }}
 QFrame#filmThumb[selected="true"] {{ border-color: {rgba(ACCENT, 0.85)}; }}
 QPushButton#filmAddThumb {{
-    background: {SURFACE_2};
-    border: 1px dashed {HAIRLINE_STRONG};
+    background: transparent;
+    border: 1px solid {HAIRLINE_STRONG};
     border-radius: {R_SMALL}px;
-    min-height: 66px;
-    max-height: 66px;
-    min-width: 66px;
-    max-width: 66px;
+    min-height: 69px;
+    max-height: 69px;
+    min-width: 92px;
+    max-width: 92px;
 }}
 QPushButton#filmAddThumb:hover {{
-    background: {SURFACE_3};
+    background: {rgba(ACCENT, 0.08)};
     border-color: {rgba(ACCENT, 0.55)};
 }}
+QPushButton#filmAddThumb:pressed {{
+    background: {rgba(ACCENT, 0.14)};
+}}
 
-/* 导出：黄铜描边胶囊，内部两段全透明 */
+/* 导出：实心黄铜主按钮 + 独立幽灵箭头，去掉描边胶囊壳 */
 QWidget#exportBox {{
     background: transparent;
-    border: 1px solid {rgba(ACCENT, 0.55)};
-    border-radius: 8px;
-    min-height: 28px;
-    max-height: 28px;
+    border: none;
 }}
 QPushButton#exportButton {{
-    background: transparent;
-    color: {ACCENT};
+    background: {ACCENT};
+    color: {ACCENT_ON};
     border: none;
-    border-top-left-radius: 7px;
-    border-bottom-left-radius: 7px;
-    padding: 0px 13px;
+    border-radius: 8px;
+    padding: 0px 15px;
     min-height: 28px;
     max-height: 28px;
     font-size: 12px;
-    font-weight: 500;
+    font-weight: 600;
 }}
-QPushButton#exportButton:hover {{ background: {rgba(ACCENT, 0.10)}; }}
-QPushButton#exportButton:pressed {{ background: {rgba(ACCENT, 0.16)}; }}
-QPushButton#exportButton:disabled {{ background: transparent; color: {TEXT_3}; }}
+QPushButton#exportButton:hover {{ background: {ACCENT_STRONG}; }}
+QPushButton#exportButton:pressed {{ background: {ACCENT_DIM}; }}
+QPushButton#exportButton:disabled {{ background: {SURFACE_3}; color: {TEXT_3}; }}
 QPushButton#exportMenu {{
     background: transparent;
     border: none;
-    border-left: 1px solid {rgba(ACCENT, 0.35)};
-    border-top-right-radius: 7px;
-    border-bottom-right-radius: 7px;
+    border-radius: 8px;
     min-height: 28px;
     max-height: 28px;
+    min-width: 22px;
+    max-width: 22px;
 }}
-QPushButton#exportMenu:hover {{ background: {rgba(ACCENT, 0.10)}; }}
-QPushButton#exportMenu:pressed {{ background: {rgba(ACCENT, 0.16)}; }}
-QPushButton#exportMenu:disabled {{ background: transparent; }}
+QPushButton#exportMenu:hover {{ background: {rgba('#FFFFFF', 0.08)}; }}
+QPushButton#exportMenu:pressed {{ background: {rgba('#FFFFFF', 0.05)}; }}
 QPushButton#exportMenu::menu-indicator {{ image: none; width: 0px; }}
 
 QMenu {{

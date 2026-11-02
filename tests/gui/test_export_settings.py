@@ -10,6 +10,7 @@ from spektrafilm_gui import controller as controller_module
 from spektrafilm_gui.controller import GuiController
 from spektrafilm_gui.export_dialog import ExportSettingsDialog
 from spektrafilm_gui.export_settings import (
+    DirectExportSettings,
     ExportSettings,
     load_export_settings,
     save_export_settings,
@@ -46,6 +47,50 @@ def test_export_settings_rejects_bad_values() -> None:
     assert settings.jpeg_quality == 100
     assert settings.png_compression == 0
     assert settings.bit_depth == 16
+
+
+def test_direct_export_settings_are_png_at_ninety_percent() -> None:
+    settings = DirectExportSettings().to_export_settings(4000)
+    assert settings.format == 'PNG'
+    assert settings.long_edge == 3600
+    assert settings.png_compression == 9
+    assert settings.directory == ''
+    assert settings.filename_template == '{name}_spektrafilm'
+
+
+@pytest.mark.usefixtures('qt_app')
+def test_export_direct_writes_png_at_ninety_percent(monkeypatch, tmp_path) -> None:
+    controller = GuiController(viewer=object(), widgets=object())
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        controller,
+        '_export_payload_or_warn',
+        lambda: (np.zeros((100, 200, 3), dtype=np.float32), 'ProPhoto RGB', False, None),
+    )
+    monkeypatch.setattr(controller, '_export_target_path', lambda settings: tmp_path / 'direct.png')
+
+    def fake_save(filepath, image_data, settings, *, color_space, cctf_encoding):
+        captured.update(
+            filepath=filepath,
+            shape=image_data.shape,
+            settings=settings,
+            color_space=color_space,
+            cctf_encoding=cctf_encoding,
+        )
+
+    monkeypatch.setattr(controller, '_save_with_settings', fake_save)
+    monkeypatch.setattr(controller, '_write_export_metadata', lambda *args, **kwargs: None)
+    monkeypatch.setattr(controller_module, 'set_status', lambda *args, **kwargs: None)
+
+    controller.export_direct()
+
+    assert captured['filepath'] == tmp_path / 'direct.png'
+    assert max(captured['shape'][:2]) == 180
+    assert captured['settings'].format == 'PNG'
+    assert captured['settings'].png_compression == 9
+    assert captured['color_space'] == 'ProPhoto RGB'
+    assert captured['cctf_encoding'] is False
 
 
 @pytest.mark.usefixtures('qt_app')

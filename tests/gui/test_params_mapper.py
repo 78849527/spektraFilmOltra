@@ -284,7 +284,7 @@ def test_build_default_gui_state_uses_runtime_defaults() -> None:
     assert state.scanner.black_correction is False
     assert state.scanner.black_level == 0.01
     assert state.gui_only.display.use_display_transform is True
-    assert state.gui_only.display.gray_18_canvas is True
+    assert state.gui_only.display.gray_18_canvas is False
     assert state.camera.auto_exposure_method == 'center_weighted'
     assert state.gui_only.display.white_padding == 0.03
     assert state.gui_only.display.settings.preview_max_size == 640

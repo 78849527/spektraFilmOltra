@@ -336,9 +336,9 @@ QLabel#deckBadge {{
 }}
 QPushButton#deckReset {{
     color: {TEXT_2}; background: transparent;
-    border: 1px solid {HAIRLINE}; border-radius: 8px;
+    border: 1px solid {HAIRLINE}; border-radius: 9px;
     font-size: 12px; font-weight: 500;
-    padding: 0px 12px;
+    padding: 0px 14px;
 }}
 QPushButton#deckReset:hover {{ background: {SURFACE_2}; border-color: {HAIRLINE_STRONG}; color: {TEXT_1}; }}
 
@@ -1122,12 +1122,12 @@ class Tabs(QtWidgets.QWidget):
     """两种分段：segmented 用于模式切换，underline 用于页面切换。"""
 
     changed = QtCore.Signal(int)
-    HEIGHT = 32
+    HEIGHT = 30
 
     def __init__(self, labels: list[str], *, variant: str = 'segmented', parent=None):
         super().__init__(parent)
         self._variant = variant
-        self._height = 30 if variant == 'underline' else 32
+        self._height = self.HEIGHT
         self.setFixedHeight(self._height)
         self._labels = labels
         self._index = 0
@@ -1177,7 +1177,7 @@ class Tabs(QtWidgets.QWidget):
     def _paint_segmented(self, painter: QtGui.QPainter) -> None:
         track = QtCore.QRectF(0.5, 0.5, self.width() - 1, self._height - 1)
         painter.setPen(QtGui.QPen(QtGui.QColor(HAIRLINE), 1))
-        painter.setBrush(QtGui.QColor(SURFACE_0))
+        painter.setBrush(QtGui.QColor(SURFACE_1))
         painter.drawRoundedRect(track, 9, 9)
 
         inner = track.adjusted(3, 3, -3, -3)
@@ -1247,7 +1247,7 @@ class ParameterDeck(QtWidgets.QWidget):
         header.setObjectName('deckHeader')
         header.setFixedHeight(48)
         layout = QtWidgets.QHBoxLayout(header)
-        layout.setContentsMargins(14, 0, 12, 0)
+        layout.setContentsMargins(PANEL_MARGIN, 0, PANEL_MARGIN, 0)
         layout.setSpacing(8)
 
         self._mode_tabs = Tabs(['快速', '专业'], variant='segmented')
@@ -1260,7 +1260,7 @@ class ParameterDeck(QtWidgets.QWidget):
         reset = QtWidgets.QPushButton('重置')
         reset.setObjectName('deckReset')
         reset.setCursor(Qt.PointingHandCursor)
-        reset.setFixedHeight(26)
+        reset.setFixedHeight(Tabs.HEIGHT)
         reset.setToolTip('把这张照片的全部参数恢复为出厂值')
         reset.clicked.connect(self.reset_requested.emit)
 

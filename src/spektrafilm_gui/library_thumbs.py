@@ -24,7 +24,7 @@ QRunnable = getattr(QtCore, 'QRunnable')
 Signal = QtCore.Signal
 QObject = QtCore.QObject
 
-THUMB_MAX_SIZE = 320
+THUMB_MAX_SIZE = 512
 THUMB_QUALITY = 88
 
 
@@ -182,7 +182,7 @@ class ThumbnailService(QObject):
         self._pool.setMaxThreadCount(max(1, int(max_threads)))
         self._requested: set[str] = set()
         self._cache: OrderedDict[str, QImage] = OrderedDict()
-        self._cache_limit = 300
+        self._cache_limit = 160
 
     def cached(self, item_id: str) -> QImage | None:
         image = self._cache.get(item_id)
@@ -208,14 +208,21 @@ class ThumbnailService(QObject):
             image = QImage(str(thumb_path))
             if not image.isNull():
                 self._remember(item.id, image)
+                if max(image.width(), image.height()) >= THUMB_MAX_SIZE * 0.8:
+                    return image
+                # 旧缓存分辨率偏低：先显示，再在后台补一张高清版
+                self._start_task(item, thumb_path)
                 return image
 
+        self._start_task(item, thumb_path)
+        return None
+
+    def _start_task(self, item: LibraryItem, thumb_path: Path) -> None:
         self._requested.add(item.id)
         task = _ThumbnailTask(item.id, item.path, str(thumb_path))
         task.signals.finished.connect(self._on_finished)
         task.signals.failed.connect(self._on_failed)
         self._pool.start(task)
-        return None
 
     def invalidate(self, item_id: str) -> None:
         self._cache.pop(item_id, None)

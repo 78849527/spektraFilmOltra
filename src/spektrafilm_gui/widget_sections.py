@@ -756,7 +756,7 @@ class DisplaySection(QWidget):
     def get_state(self) -> DisplayState:
         state = clone_state_section(self._source) if self._source is not None else DisplayState(
             use_display_transform=True,
-            gray_18_canvas=True,
+            gray_18_canvas=False,
             white_padding=0.03,
             output_interpolation='spline36',
         )

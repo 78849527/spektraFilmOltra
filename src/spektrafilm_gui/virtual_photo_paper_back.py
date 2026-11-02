@@ -19,8 +19,8 @@ ROMBIC_GRID_ANGLE = 72.0  # degrees
 GLOBAL_ROTATION = 16.0  # degrees
 PHASE_HORIZONTAL = 0.0  # long-edge fraction
 PHASE_VERTICAL = 0.0  # long-edge fraction
-DEFAULT_LOGO_RGB = np.array((215,215,215))/255  # RGB 0..1
-DEFAULT_BACKGROUND_RGB = np.array((242,242,242))/255  # RGB 0..1
+DEFAULT_LOGO_RGB = np.array((62, 62, 64)) / 255  # RGB 0..1
+DEFAULT_BACKGROUND_RGB = np.array((36, 36, 38)) / 255  # RGB 0..1
 DEFAULT_GLARE = 0.25  # paper glare strength
 
 

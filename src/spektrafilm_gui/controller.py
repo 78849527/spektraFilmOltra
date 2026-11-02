@@ -15,7 +15,12 @@ from spektrafilm_gui import controller_profile_sync as profile_sync
 from spektrafilm_gui import controller_runtime as runtime
 from spektrafilm_gui.input_color import detect_input_color_space
 from spektrafilm_gui.library_store import RAW_SUFFIXES
-from spektrafilm_gui.export_settings import ExportSettings, load_export_settings, save_export_settings
+from spektrafilm_gui.export_settings import (
+    DirectExportSettings,
+    ExportSettings,
+    load_export_settings,
+    save_export_settings,
+)
 from spektrafilm_gui.controller_layers import (
     INPUT_LAYER_NAME,
     INPUT_PREVIEW_LAYER_NAME,
@@ -57,6 +62,9 @@ DISPLAY_PREVIEW_MAX_SIZE = 1600
 PREVIEW_SIMULATION_MAX_EDGE = 1920
 PREVIEW_DEBOUNCE_MS = 120
 PREVIEW_RENDER_SCALES = (1.0, 0.5, 0.25)
+HANDOFF_MODE_LABEL = 'Handoff'
+HANDOFF_COLOR_SPACE = 'ProPhoto RGB'
+DIRECT_EXPORT_SETTINGS = DirectExportSettings()
 
 
 def _sanitize_filename(name: str) -> str:
@@ -185,8 +193,12 @@ class GuiController:
         self._simulation_progress_callbacks: list[Callable[[str, int, int], None]] = []
         self._simulation_failed_callbacks: list[Callable[[str], None]] = []
         self._export_after_scan = False
+        self._export_after_scan_direct = False
         self._export_pending_after_simulation = False
+        self._export_direct_pending = False
         self._export_settings = load_export_settings()
+        self._handoff_target_path: Path | None = None
+        self._handoff_callback: Callable[..., None] | None = None
 
     def show_startup_placeholder(self) -> None:
         if self._white_border_layer() is not None:
@@ -380,6 +392,66 @@ class GuiController:
     def is_simulating(self) -> bool:
         return self._active_simulation_worker is not None
 
+    def start_handoff(self, path: str, callback: Callable[..., None] | None = None) -> bool:
+        """跑一次全尺寸显影，生成调色台交接图；结果不写入预览图层。
+
+        回调签名 ``callback(result, error)``，成功时 error 为 None，
+        result.float_image 是 ProPhoto RGB 线性 float 输出。
+        """
+        if self._active_simulation_worker is not None:
+            set_status(self._viewer, '显影完成后再调色')
+            return False
+        if self._current_input_image is None:
+            set_status(self._viewer, '请先载入一张输入图像')
+            return False
+
+        state = collect_gui_state(widgets=self._widgets)
+        params = build_params_from_state(state)
+        io_params = getattr(params, 'io', None)
+        if io_params is None:
+            return False
+        io_params.output_color_space = HANDOFF_COLOR_SPACE
+        io_params.output_cctf_encoding = False
+        settings = getattr(params, 'settings', None)
+        if settings is not None and hasattr(settings, 'preview_mode'):
+            settings.preview_mode = False
+
+        request = SimulationRequest(
+            mode_label=HANDOFF_MODE_LABEL,
+            image=np.double(self._current_input_image),
+            params=params,
+            output_color_space=HANDOFF_COLOR_SPACE,
+            use_display_transform=False,
+        )
+        self._handoff_target_path = Path(path)
+        self._handoff_callback = callback
+        self._launch_worker(request, report_status=True)
+        return True
+
+    def _finish_handoff(self, result: SimulationResult) -> None:
+        path = self._handoff_target_path
+        callback = self._handoff_callback
+        self._handoff_target_path = None
+        self._handoff_callback = None
+        error: Exception | None = None
+        if path is None:
+            error = ValueError('缺少交接图目标路径')
+        else:
+            try:
+                save_image_oiio(
+                    str(path),
+                    np.asarray(result.float_image),
+                    bit_depth=16,
+                    color_space=HANDOFF_COLOR_SPACE,
+                    cctf_encoding=False,
+                )
+            except Exception as exc:
+                error = exc
+        if error is None:
+            set_status(self._viewer, f'交接图已写入 {path}')
+        if callback is not None:
+            callback(None if error is not None else result, error)
+
     def add_simulation_finished_callback(self, callback: Callable[[SimulationResult], None]) -> None:
         """只增加一个“算完了”的展示回调，不改动模拟调度与参数。"""
         if callback not in self._simulation_finished_callbacks:
@@ -419,13 +491,27 @@ class GuiController:
         """一键导出：正在渲染时排队，渲染完成后自动导出全尺寸。"""
         if self._active_simulation_worker is not None:
             self._export_pending_after_simulation = True
+            self._export_direct_pending = False
             set_status(self._viewer, '已排队，当前渲染完成后自动导出')
             return
         self._export_pending_after_simulation = False
+        self._export_direct_pending = False
         self._export_after_scan = True
+        self._export_after_scan_direct = False
         self.run_scan()
         if self._active_simulation_worker is None:
             self._export_after_scan = False
+
+    def request_direct_export(self) -> None:
+        """箭头菜单的直接导出：PNG / 90% 长边 / 最高压缩，不改导出面板设置。"""
+        if self._active_simulation_worker is not None:
+            self._export_pending_after_simulation = True
+            self._export_direct_pending = True
+            set_status(self._viewer, '已排队，当前渲染完成后自动导出')
+            return
+        self._export_pending_after_simulation = False
+        self._export_direct_pending = False
+        self.export_direct()
 
     def request_auto_preview(self, *_args) -> None:
         timer = self._preview_timer
@@ -508,19 +594,42 @@ class GuiController:
         return image_data, saving_color_space, saving_cctf_encoding, source_metadata
 
     def export_now(self) -> None:
-        """直接导出：使用当前导出设置，不弹保存对话框。"""
+        """按导出面板的完整设置导出，不弹保存对话框。"""
+        self._export_with_settings(self._export_settings.normalized())
+
+    def export_direct(self) -> None:
+        """直接导出：PNG / 原图长边 90% / 最高压缩，与导出面板设置无关。"""
+        payload = self._export_payload_or_warn()
+        if payload is None:
+            return
+        image_data = payload[0]
+        long_edge = max(int(value) for value in image_data.shape[:2])
+        self._export_with_settings(
+            DIRECT_EXPORT_SETTINGS.to_export_settings(long_edge),
+            payload=payload,
+        )
+
+    def _export_payload_or_warn(self):
         if self._output_layer() is None:
             QMessageBox.warning(dialog_parent(self._viewer), '导出', '请先运行一次模拟，再导出。')
-            return
+            return None
         if self._active_simulation_worker is not None:
             set_status(self._viewer, '模拟正在运行中，请稍候')
-            return
+            return None
+        return self._export_image_payload()
 
-        payload = self._export_image_payload()
+    def _export_with_settings(
+        self,
+        settings: ExportSettings,
+        *,
+        payload=None,
+    ) -> None:
+        if payload is None:
+            payload = self._export_payload_or_warn()
         if payload is None:
             return
         image_data, color_space, cctf_encoding, source_metadata = payload
-        settings = self._export_settings.normalized()
+        settings = settings.normalized()
         if settings.long_edge > 0 and max(image_data.shape[:2]) > settings.long_edge:
             image_data = self._resize_for_preview(image_data, max_size=settings.long_edge)
 
@@ -1066,23 +1175,26 @@ class GuiController:
             output_color_space=state.simulation.io.output_color_space,
             use_display_transform=state.gui_only.display.use_display_transform,
         )
+        self._launch_worker(request, report_status=report_status)
 
+    def _launch_worker(self, request: SimulationRequest, *, report_status: bool) -> None:
         worker = runtime.SimulationWorker(request, execute_request=self._execute_simulation_request)
         worker.signals.finished.connect(self._on_simulation_finished)
         worker.signals.failed.connect(self._on_simulation_failed)
         worker.signals.progress.connect(self._on_simulation_progress)
         self._active_simulation_worker = worker
-        self._active_simulation_label = mode_label
+        self._active_simulation_label = request.mode_label
         self._active_simulation_reports_status = report_status
         self._set_simulation_controls_enabled(False)
-        scale = 1.0 if source_layer_name == INPUT_LAYER_NAME else self._preview_render_scale
+        full_size = request.mode_label in {'Scan', HANDOFF_MODE_LABEL}
+        scale = 1.0 if full_size else self._preview_render_scale
         for callback in tuple(self._simulation_started_callbacks):
             try:
-                callback(mode_label, scale)
+                callback(request.mode_label, scale)
             except (AttributeError, LookupError, RuntimeError, TypeError, ValueError):
                 continue
         if report_status:
-            set_status(self._viewer, f'正在计算{tr(mode_label)}…', timeout_ms=0)
+            set_status(self._viewer, f'正在计算{tr(request.mode_label)}…', timeout_ms=0)
         self._thread_pool.start(worker)
 
     def _on_simulation_progress(self, label: str, completed: int, total: int) -> None:
@@ -1105,6 +1217,9 @@ class GuiController:
         self._active_simulation_label = None
         self._active_simulation_reports_status = True
         self._set_simulation_controls_enabled(True)
+        if result.mode_label == HANDOFF_MODE_LABEL:
+            self._finish_handoff(result)
+            return
         if result.mode_label == 'Preview':
             self._last_preview_fingerprint = self._pending_preview_fingerprint
             self._pending_preview_fingerprint = None
@@ -1123,7 +1238,9 @@ class GuiController:
             except (AttributeError, LookupError, RuntimeError, TypeError, ValueError):
                 continue
         pending_export = self._export_pending_after_simulation
+        pending_direct = self._export_direct_pending
         self._export_pending_after_simulation = False
+        self._export_direct_pending = False
         do_export_now = False
         start_export_scan = False
         if pending_export:
@@ -1131,13 +1248,21 @@ class GuiController:
                 do_export_now = True
             else:
                 start_export_scan = True
+                self._export_after_scan_direct = pending_direct
         if self._export_after_scan and result.mode_label == 'Scan':
             self._export_after_scan = False
             do_export_now = True
+            pending_direct = self._export_after_scan_direct
+            self._export_after_scan_direct = False
         if start_export_scan:
-            QTimer.singleShot(0, self._start_export_scan)
+            if pending_direct:
+                QTimer.singleShot(
+                    0, lambda: self._start_export_scan(direct=True)
+                )
+            else:
+                QTimer.singleShot(0, self._start_export_scan)
         elif do_export_now:
-            QTimer.singleShot(0, self.export_now)
+            QTimer.singleShot(0, self.export_direct if pending_direct else self.export_now)
         else:
             self._replay_pending_auto_preview()
 
@@ -1145,11 +1270,19 @@ class GuiController:
         had_export = self._export_pending_after_simulation or self._export_after_scan
         self._active_simulation_worker = None
         self._export_pending_after_simulation = False
+        self._export_direct_pending = False
         self._export_after_scan = False
+        self._export_after_scan_direct = False
         mode_label = self._active_simulation_label or '模拟'
         self._active_simulation_label = None
         self._active_simulation_reports_status = True
         self._set_simulation_controls_enabled(True)
+        handoff_callback = self._handoff_callback
+        self._handoff_callback = None
+        self._handoff_target_path = None
+        if handoff_callback is not None:
+            handoff_callback(None, RuntimeError(message))
+            return
         QMessageBox.critical(dialog_parent(self._viewer), '运行模拟', f'模拟失败。\n\n{message}')
         set_status(self._viewer, f'{tr(mode_label)}失败')
         for callback in tuple(self._simulation_failed_callbacks):
@@ -1160,7 +1293,8 @@ class GuiController:
         if not had_export:
             self._replay_pending_auto_preview()
 
-    def _start_export_scan(self) -> None:
+    def _start_export_scan(self, *, direct: bool = False) -> None:
+        self._export_after_scan_direct = bool(direct)
         self._export_after_scan = True
         self.run_scan()
         if self._active_simulation_worker is None:

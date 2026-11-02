@@ -44,7 +44,8 @@ RENDER_SCALE_LABELS = {1.0: '完整', 0.5: '1/2', 0.25: '1/4'}
 
 class EditorTopBar(QWidget):
     back_requested = Signal()
-    export_requested = Signal()
+    grade_requested = Signal()
+    direct_export_requested = Signal()
     export_settings_requested = Signal()
     quick_preview_requested = Signal()
     scan_requested = Signal()
@@ -55,6 +56,8 @@ class EditorTopBar(QWidget):
         super().__init__(parent)
         self.setObjectName('editorTopBar')
         self.setFixedHeight(54)
+        self._grade_ready = False
+        self._simulation_busy = False
         layout = QHBoxLayout(self)
         layout.setContentsMargins(16, 0, 16, 0)
         layout.setSpacing(10)
@@ -110,14 +113,20 @@ class EditorTopBar(QWidget):
         self._favorite.setToolTip('收藏这张照片')
         self._favorite.toggled.connect(self._on_favorite_toggled)
 
-        self._export_button = QPushButton('导出')
-        self._export_button.setObjectName('exportButton')
-        self._export_button.setCursor(Qt.PointingHandCursor)
-        self._export_button.setFixedHeight(28)
-        self._export_button.setToolTip('按当前导出设置直接导出；点右侧箭头修改设置')
-        self._export_button.setIcon(shell_icons.icon('export', ACCENT_ON, 12))
-        self._export_button.setIconSize(QtCore.QSize(12, 12))
-        self._export_button.clicked.connect(self.export_requested.emit)
+        # 有调色配方时亮起的黄铜小点，贴在主按钮左侧。
+        self._grade_dot = QLabel()
+        self._grade_dot.setFixedSize(6, 6)
+        self._grade_dot.setStyleSheet(f'background: {ACCENT}; border-radius: 3px;')
+        self._grade_dot.setToolTip('该工程已有调色配方')
+        self._grade_dot.hide()
+
+        self._grade_button = QPushButton('调色')
+        self._grade_button.setObjectName('exportButton')
+        self._grade_button.setCursor(Qt.PointingHandCursor)
+        self._grade_button.setFixedHeight(28)
+        self._grade_button.setIcon(shell_icons.icon('grade', ACCENT_ON, 12))
+        self._grade_button.setIconSize(QtCore.QSize(12, 12))
+        self._grade_button.clicked.connect(self.grade_requested.emit)
 
         self._export_menu = QPushButton()
         self._export_menu.setObjectName('exportMenu')
@@ -127,6 +136,8 @@ class EditorTopBar(QWidget):
         self._export_menu.setFixedHeight(28)
         self._export_menu.setCursor(Qt.PointingHandCursor)
         menu = QMenu(self._export_menu)
+        menu.addAction('直接导出（当前工程）', self.direct_export_requested.emit)
+        menu.addSeparator()
         menu.addAction('导出设置…', self.export_settings_requested.emit)
         menu.addAction('另存为…', self.save_requested.emit)
         self._export_menu.setMenu(menu)
@@ -135,8 +146,9 @@ class EditorTopBar(QWidget):
         export_box.setObjectName('exportBox')
         export_layout = QHBoxLayout(export_box)
         export_layout.setContentsMargins(0, 0, 0, 0)
-        export_layout.setSpacing(4)
-        export_layout.addWidget(self._export_button)
+        export_layout.setSpacing(6)
+        export_layout.addWidget(self._grade_dot, 0, Qt.AlignVCenter)
+        export_layout.addWidget(self._grade_button)
         export_layout.addWidget(self._export_menu)
 
         layout.addWidget(back, 0, Qt.AlignVCenter)
@@ -145,6 +157,25 @@ class EditorTopBar(QWidget):
         layout.addSpacing(2)
         layout.addWidget(self._favorite, 0, Qt.AlignVCenter)
         layout.addWidget(export_box, 0, Qt.AlignVCenter)
+        self._sync_grade_button()
+
+    def set_grade_ready(self, ready: bool) -> None:
+        self._grade_ready = bool(ready)
+        self._sync_grade_button()
+
+    def set_grade_recipe(self, has_recipe: bool) -> None:
+        self._grade_dot.setVisible(bool(has_recipe))
+
+    def _sync_grade_button(self) -> None:
+        enabled = self._grade_ready and not self._simulation_busy
+        self._grade_button.setEnabled(enabled)
+        if self._simulation_busy:
+            tip = '显影完成后再调色'
+        elif not self._grade_ready:
+            tip = '先完成一次显影，再进入调色台'
+        else:
+            tip = '把当前显影结果交给调色台；右侧箭头可直接导出'
+        self._grade_button.setToolTip(tip)
 
     def set_photo(self, item: LibraryItem) -> None:
         self._name.setText(item.name)
@@ -184,6 +215,8 @@ class EditorTopBar(QWidget):
         self._progress.setGeometry(0, max(0, self.height() - 2), self.width(), 2)
 
     def set_simulation_busy(self, busy: bool, scale: float = 1.0) -> None:
+        self._simulation_busy = bool(busy)
+        self._sync_grade_button()
         if busy:
             self._progress.setRange(0, 1)
             self._progress.setValue(0)
@@ -242,13 +275,13 @@ class PreviewStage(QWidget):
         self._after_chip.setParent(self._canvas)
         self._after_chip.hide()
 
-        # 底部信息 chip（悬浮在画面上，不做通栏条）
+        # 底部信息：纯文字，不套盒子，避免和工具条打架
         self._info = ElidedLabel('')
         self._info.setObjectName('floatInfo')
         self._info.setFont(tabular_font(self._info.font()))
         self._info.setParent(self._canvas)
 
-        # 左下角渲染档位：完整 / 1/2 / 1/4
+        # 渲染档位：完整 / 1/2 / 1/4（并入底部工具条）
         self._scale_button = QPushButton('1/2')
         self._scale_button.setObjectName('scalePill')
         self._scale_button.setFixedHeight(26)
@@ -270,12 +303,19 @@ class PreviewStage(QWidget):
         self._scale_button.setMenu(scale_menu)
         self._scale_actions[0.5].setChecked(True)
 
-        # 悬浮工具条：对比 / 渲染 / 旋转 / 适应 / 缩放
+        # 底部悬浮工具条：档位 / 对比 / 渲染 / 旋转 / 适应 / 缩放，一条搞定
         self._toolbar = QWidget(self._canvas)
-        self._toolbar.setObjectName('floatToolbar')
+        self._toolbar.setObjectName('floatBar')
         tools = QHBoxLayout(self._toolbar)
-        tools.setContentsMargins(8, 1, 8, 1)
+        tools.setContentsMargins(6, 2, 6, 2)
         tools.setSpacing(2)
+
+        tools.addWidget(self._scale_button)
+        scale_divider = QFrame()
+        scale_divider.setObjectName('floatDivider')
+        scale_divider.setFixedSize(1, 14)
+        tools.addWidget(scale_divider, 0, Qt.AlignVCenter)
+        tools.addSpacing(2)
 
         self._compare_button = QPushButton('对比')
         self._compare_button.setObjectName('ghostAction')
@@ -363,11 +403,6 @@ class PreviewStage(QWidget):
         self._before_chip.move(14, 14)
         self._after_chip.move(width - 14 - self._after_chip.width(), 14)
 
-        self._info.adjustSize()
-        self._scale_button.adjustSize()
-        button_height = max(self._scale_button.height(), 26)
-        self._scale_button.move(14, height - 14 - button_height)
-
         self._toolbar.adjustSize()
         toolbar_layout = self._toolbar.layout()
         if toolbar_layout is not None:
@@ -375,15 +410,16 @@ class PreviewStage(QWidget):
         toolbar_x = width - 14 - self._toolbar.width()
         self._toolbar.move(toolbar_x, height - 14 - self._toolbar.height())
 
-        info_x = 14 + self._scale_button.width() + 10
-        info_width = max(0, toolbar_x - info_x - 12)
+        # 信息是纯文字：贴左下，与工具条底边对齐
+        self._info.adjustSize()
+        info_width = max(0, toolbar_x - 14 - 24)
         self._info.setFixedWidth(info_width)
-        self._info.move(info_x, height - 14 - self._info.height())
+        info_y = height - 14 - self._info.height() - (self._toolbar.height() - self._info.height()) // 2
+        self._info.move(14, max(14, info_y))
         self._chip.raise_()
         self._before_chip.raise_()
         self._after_chip.raise_()
         self._info.raise_()
-        self._scale_button.raise_()
         self._toolbar.raise_()
 
     def resizeEvent(self, event) -> None:  # noqa: N802 - Qt API name
@@ -523,14 +559,14 @@ class FilmThumb(QFrame):
         super().__init__(parent)
         self.setObjectName('filmThumb')
         self.item_id = item.id
-        self.setFixedSize(66, 66)
+        self.setFixedSize(92, 69)
         self.setCursor(Qt.PointingHandCursor)
         self.setToolTip(item.name)
         self._selected = False
         self._thumb = ThumbnailView()
         self._thumb.set_raw(item.is_raw)
         self._thumb.set_missing(not item.exists)
-        self._thumb.setFixedSize(58, 58)
+        self._thumb.setFixedSize(84, 63)
         if image is not None and not image.isNull():
             self._thumb.set_image(image)
         layout = QVBoxLayout(self)
@@ -577,7 +613,7 @@ class Filmstrip(QWidget):
     def __init__(self, thumbnails: ThumbnailService, parent: QWidget | None = None):
         super().__init__(parent)
         self.setObjectName('filmstrip')
-        self.setFixedHeight(84)
+        self.setFixedHeight(96)
         self._thumbnails = thumbnails
         self._thumbs: dict[str, FilmThumb] = {}
 
@@ -621,7 +657,7 @@ class Filmstrip(QWidget):
 
         add = QPushButton()
         add.setObjectName('filmAddThumb')
-        add.setFixedSize(66, 66)
+        add.setFixedSize(92, 69)
         add.setCursor(Qt.PointingHandCursor)
         add.setToolTip('导入照片')
         add.setIcon(shell_icons.icon('plus', TEXT_3, 20))
@@ -648,7 +684,8 @@ class Filmstrip(QWidget):
 
 class EditorPage(QWidget):
     back_requested = Signal()
-    export_requested = Signal()
+    grade_requested = Signal()
+    direct_export_requested = Signal()
     export_settings_requested = Signal()
     quick_preview_requested = Signal()
     scan_requested = Signal()
@@ -712,7 +749,8 @@ class EditorPage(QWidget):
         root.addWidget(splitter, 1)
 
         self.top_bar.back_requested.connect(self.back_requested.emit)
-        self.top_bar.export_requested.connect(self.export_requested.emit)
+        self.top_bar.grade_requested.connect(self.grade_requested.emit)
+        self.top_bar.direct_export_requested.connect(self.direct_export_requested.emit)
         self.top_bar.export_settings_requested.connect(self.export_settings_requested.emit)
         self.top_bar.quick_preview_requested.connect(self.quick_preview_requested.emit)
         self.top_bar.scan_requested.connect(self.scan_requested.emit)
@@ -784,6 +822,12 @@ class EditorPage(QWidget):
 
     def set_simulation_busy(self, busy: bool, scale: float = 1.0) -> None:
         self.top_bar.set_simulation_busy(busy, scale)
+
+    def set_grade_ready(self, ready: bool) -> None:
+        self.top_bar.set_grade_ready(ready)
+
+    def set_grade_recipe(self, has_recipe: bool) -> None:
+        self.top_bar.set_grade_recipe(has_recipe)
 
     def set_simulation_progress(self, label: str, completed: int, total: int) -> None:
         self.top_bar.set_simulation_progress(label, completed, total)
