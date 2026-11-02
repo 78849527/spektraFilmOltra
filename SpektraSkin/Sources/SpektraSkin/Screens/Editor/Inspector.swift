@@ -38,8 +38,8 @@ struct InspectorView: View {
 
             Spacer(minLength: 0)
 
-            if snapshot.dirtyCount > 0 {
-                Text("\(snapshot.dirtyCount)")
+            if badgeCount > 0 {
+                Text("\(badgeCount)")
                     .font(.skin(10.5, .medium).monospacedDigit())
                     .foregroundStyle(SkinColor.accent)
                     .padding(.horizontal, 6)
@@ -48,7 +48,7 @@ struct InspectorView: View {
                         RoundedRectangle(cornerRadius: 6, style: .continuous)
                             .fill(SkinColor.accent.opacity(0.10))
                     )
-                    .help("\(snapshot.dirtyCount) 项参数已调整")
+                    .help("\(badgeCount) 项参数已调整")
             }
 
             SkinButton("重置", kind: .secondary, height: 26) {
@@ -77,6 +77,20 @@ struct InspectorView: View {
                 SkinHistogram(data: snapshot.histogram)
             }
         }
+    }
+
+    private var badgeCount: Int {
+        if mode == 0 {
+            return snapshot.dirtyCount
+        }
+        return snapshot.proPages
+            .flatMap(\.groups)
+            .flatMap(\.rows)
+            .filter {
+                if case .slider(_, _, let dirty) = $0.control { return dirty }
+                return false
+            }
+            .count
     }
 }
 
@@ -107,7 +121,7 @@ struct QuickPanel: View {
                     }
 
                     Text(item.element.title)
-                        .font(.skin(10.5, .semibold))
+                        .font(.groupLabel)
                         .tracking(0.4)
                         .foregroundStyle(SkinColor.text3)
                         .padding(.bottom, 3)
@@ -224,7 +238,7 @@ private struct QuickAxisRow: View {
                 Spacer(minLength: 8)
 
                 Text(axis.text(for: value))
-                    .font(.skin(11.5).monospacedDigit())
+                    .font(.readout)
                     .foregroundStyle(axis.isDirty ? SkinColor.accent : SkinColor.text3)
                     .lineLimit(1)
             }

@@ -47,7 +47,7 @@ struct ProPanel: View {
                         }
 
                         Text(item.element.title)
-                            .font(.skin(10.5, .semibold))
+                            .font(.groupLabel)
                             .tracking(0.4)
                             .foregroundStyle(SkinColor.text3)
                             .padding(.bottom, 2)
@@ -143,7 +143,7 @@ private struct ParamRowView: View {
     var body: some View {
         Group {
             switch row.control {
-            case .slider(_, let valueText, let dirty):
+            case .slider(_, _, let dirty):
                 VStack(spacing: 5) {
                     HStack(spacing: 6) {
                         Text(row.label)
@@ -151,8 +151,8 @@ private struct ParamRowView: View {
                             .foregroundStyle(labelColor)
                             .lineLimit(1)
                         Spacer(minLength: 8)
-                        Text(valueText)
-                            .font(.skin(11.5).monospacedDigit())
+                        Text(displayValue(for: row))
+                            .font(.readout)
                             .foregroundStyle(dirty ? SkinColor.accent : SkinColor.text3)
                             .lineLimit(1)
                     }
@@ -207,5 +207,14 @@ private struct ParamRowView: View {
     private var labelColor: Color {
         guard row.isEnabled else { return SkinColor.text4 }
         return hovered ? SkinColor.text1 : SkinColor.text2
+    }
+
+    private func displayValue(for row: ParamRow) -> String {
+        guard case .slider(let initial, let text, _) = row.control else { return "" }
+        guard abs(value - initial) > 1e-9 else { return text }
+        if value >= 100 {
+            return String(format: "%.0f", value)
+        }
+        return String(format: "%.2f", value)
     }
 }

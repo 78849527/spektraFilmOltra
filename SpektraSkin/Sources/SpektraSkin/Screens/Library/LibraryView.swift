@@ -70,12 +70,12 @@ struct LibraryView: View {
         HStack(alignment: .center, spacing: 10) {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
                 Text("照片库")
-                    .font(.skin(23, .medium))
+                    .font(.pageTitle)
                     .tracking(0.4)
                     .foregroundStyle(SkinColor.text1)
 
                 Text("\(snapshot.folderCount) 个文件夹 · \(snapshot.photoCount) 张照片")
-                    .font(.skin(11).monospacedDigit())
+                    .font(.pageSubtitle.monospacedDigit())
                     .foregroundStyle(SkinColor.text3)
                     .lineLimit(1)
             }
@@ -163,7 +163,7 @@ struct LibraryView: View {
     private var sectionHead: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text(snapshot.sectionTitle)
-                .font(.skin(13, .semibold))
+                .font(.sectionTitle)
                 .tracking(0.2)
                 .foregroundStyle(SkinColor.text2)
 

@@ -73,7 +73,7 @@ fi
 swiftc \
   -parse-as-library \
   -O \
-  -target arm64-apple-macosx14.0 \
+  -target "$(uname -m)-apple-macosx14.0" \
   -framework SwiftUI \
   -framework AppKit \
   "${EXTRA_FLAGS[@]}" \

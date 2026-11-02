@@ -376,7 +376,7 @@ enum PreviewData {
             quickGroups: quickGroups,
             proPages: proPages(film: photo.film, paper: paperName),
             histogram: histogram,
-            dirtyCount: 3,
+            dirtyCount: 4,
             currentFilmID: filmID,
             currentPaperID: paperID,
             stripCount: photos.count

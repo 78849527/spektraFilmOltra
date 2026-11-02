@@ -84,11 +84,11 @@ enum SkinMetric {
 // MARK: - 字体
 
 extension Font {
-    static func skin(_ size: CGFloat, _ weight: Font.Weight = .regular, monoDigits: Bool = false) -> Font {
+    static func skin(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
         .system(size: size, weight: weight, design: .default)
     }
 
-    static let pageTitle = Font.skin(26, .medium)
+    static let pageTitle = Font.skin(23, .medium)
     static let pageSubtitle = Font.skin(11)
     static let sectionTitle = Font.skin(13, .semibold)
     static let body = Font.skin(12)
