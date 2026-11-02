@@ -219,6 +219,23 @@ class QuickEngine:
     def statuses(self, state: GuiState) -> dict[str, str]:
         return {name: self.status(state, name) for name in AXES}
 
+    def native_summary(self, state: GuiState, name: str) -> str:
+        """该轴拥有的原生字段当前值，供快速面板 tooltip 显示。"""
+        axis = AXES[name]
+        lines = []
+        for path in axis.owned:
+            value = _read_path(state, path)
+            if isinstance(value, bool):
+                text = '开' if value else '关'
+            elif isinstance(value, tuple):
+                text = '[' + ', '.join(f'{float(item):.3g}' for item in value) + ']'
+            elif isinstance(value, (int, float)):
+                text = f'{float(value):.3g}'
+            else:
+                text = str(value)
+            lines.append(f'{path} = {text}')
+        return '\n'.join(lines)
+
     def dirty_count(self) -> int:
         return sum(1 for value in self.intent.values() if abs(float(value)) > _EPS)
 

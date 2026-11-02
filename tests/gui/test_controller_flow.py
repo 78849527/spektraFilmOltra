@@ -603,16 +603,21 @@ def test_start_simulation_skips_computing_status_for_silent_preview(monkeypatch)
     np.testing.assert_allclose(captured['worker']._request.image, np.double(preview_image))
 
 
-def test_request_auto_preview_schedules_once_and_runs_preview(monkeypatch) -> None:
+def test_request_auto_preview_restarts_single_timer(monkeypatch) -> None:
     simulation_section = SimpleNamespace(auto_preview_value=lambda: True)
     controller = GuiController(viewer=object(), widgets=SimpleNamespace(simulation=simulation_section))
     controller._current_preview_image = np.full((2, 2, 3), 0.25, dtype=np.float32)
     captured: dict[str, object] = {}
 
-    def fake_single_shot(delay_ms, callback):
-        captured.setdefault('scheduled', []).append((delay_ms, callback))
+    class _Timer:
+        def __init__(self) -> None:
+            self.starts = 0
 
-    monkeypatch.setattr(controller_module.QTimer, 'singleShot', staticmethod(fake_single_shot))
+        def start(self) -> None:
+            self.starts += 1
+
+    timer = _Timer()
+    controller._preview_timer = timer
     monkeypatch.setattr(
         controller,
         '_run_preview',
@@ -622,11 +627,9 @@ def test_request_auto_preview_schedules_once_and_runs_preview(monkeypatch) -> No
     controller.request_auto_preview()
     controller.request_auto_preview()
 
-    assert len(captured['scheduled']) == 1
-    scheduled_delay, scheduled_callback = captured['scheduled'][0]
-    assert scheduled_delay == controller_module.PREVIEW_DEBOUNCE_MS
+    assert timer.starts == 2
 
-    scheduled_callback()
+    controller._run_scheduled_auto_preview()
 
     assert captured['preview_runs'] == [True]
 
@@ -638,7 +641,15 @@ def test_request_auto_preview_replays_after_active_simulation(monkeypatch) -> No
     controller._active_simulation_worker = object()
     captured: dict[str, object] = {}
 
-    monkeypatch.setattr(controller_module.QTimer, 'singleShot', staticmethod(lambda delay_ms, callback: captured.setdefault('scheduled', []).append((delay_ms, callback))))
+    class _Timer:
+        def __init__(self) -> None:
+            self.starts = 0
+
+        def start(self) -> None:
+            self.starts += 1
+
+    timer = _Timer()
+    controller._preview_timer = timer
     monkeypatch.setattr(
         controller,
         '_run_preview',
@@ -646,17 +657,16 @@ def test_request_auto_preview_replays_after_active_simulation(monkeypatch) -> No
     )
 
     controller.request_auto_preview()
-    scheduled_callback = captured['scheduled'][0][1]
-    scheduled_callback()
+    controller._run_scheduled_auto_preview()
 
     assert controller._pending_auto_preview is True
     assert 'preview_runs' not in captured
 
     controller._active_simulation_worker = None
     controller._replay_pending_auto_preview()
-    replay_callback = captured['scheduled'][1][1]
-    replay_callback()
+    controller._run_scheduled_auto_preview()
 
+    assert timer.starts == 2
     assert captured['preview_runs'] == [True]
 
 

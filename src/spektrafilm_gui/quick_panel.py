@@ -7,7 +7,8 @@ from typing import Mapping
 from qtpy import QtCore, QtGui, QtWidgets
 
 from spektrafilm_gui import motion
-from spektrafilm_gui.quick_controls import AXES, QUICK_LAYOUT, QuickAxis
+from spektrafilm_gui.quick_controls import AXES, PAD_CC_FULL_SCALE, QUICK_LAYOUT, QuickAxis
+from spektrafilm_gui.quick_engine import STATUS_CUSTOM
 from spektrafilm_gui.theme_oflim import (
     ACCENT,
     HAIRLINE_STRONG,
@@ -19,6 +20,8 @@ from spektrafilm_gui.widget_primitives import WheelSafeSlider, tabular_font
 
 Qt = QtCore.Qt
 Signal = QtCore.Signal
+
+PAD_CC_PER_UNIT = PAD_CC_FULL_SCALE / 100.0
 
 
 def _format_value(axis: QuickAxis, value: float) -> str:
@@ -32,6 +35,19 @@ def _format_value(axis: QuickAxis, value: float) -> str:
     if axis.lo < 0 and value > 0:
         text = f'+{text}'
     return f'{text}{axis.suffix}'
+
+
+def _format_cc(value: float) -> str:
+    """快速轴 q 值换算成 Kodak CC：满量程 ±100 对应 ±60 CC。"""
+    cc = float(value) * PAD_CC_PER_UNIT
+    if abs(cc) < 0.05:
+        cc = 0.0
+    text = f'{cc:.1f}'
+    if text.endswith('.0'):
+        text = text[:-2]
+    if cc > 0:
+        text = f'+{text}'
+    return f'{text} CC'
 
 
 class _StatusDot(QtWidgets.QLabel):
@@ -55,6 +71,7 @@ class QuickAxisRow(QtWidgets.QWidget):
         self._available = True
         self._reason = ''
         self._custom_detail = ''
+        self._native_detail = ''
         self.setFixedHeight(46)
         self.setToolTip(axis.tooltip)
 
@@ -161,10 +178,14 @@ class QuickAxisRow(QtWidgets.QWidget):
             widget.style().polish(widget)
 
     def set_status(self, status: str, detail: str = '') -> None:
-        custom = status == 'custom'
+        custom = status == STATUS_CUSTOM
         self._dot.setVisible(custom)
         self._dot.setToolTip(detail)
         self._custom_detail = detail if custom else ''
+        self._apply_tooltip()
+
+    def set_native_detail(self, detail: str) -> None:
+        self._native_detail = str(detail)
         self._apply_tooltip()
 
     def set_available(self, available: bool, reason: str = '') -> None:
@@ -178,6 +199,8 @@ class QuickAxisRow(QtWidgets.QWidget):
 
     def _apply_tooltip(self) -> None:
         parts = [self._axis.tooltip]
+        if self._native_detail:
+            parts.append(f'当前原生值：\n{self._native_detail}')
         if not self._available and self._reason:
             parts.append(self._reason)
         if self._custom_detail:
@@ -205,6 +228,7 @@ class QuickColorPad(QtWidgets.QWidget):
         self._dragging = False
         self._available = True
         self._reason = ''
+        self._native_detail = ''
         self._timer = QtCore.QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.setInterval(150)
@@ -214,9 +238,20 @@ class QuickColorPad(QtWidgets.QWidget):
         self._available = bool(available)
         self._reason = '' if self._available else str(reason)
         self.setEnabled(self._available)
-        tip = self._tooltip if self._available else f'{self._tooltip}\n{self._reason}'
-        self.setToolTip(tip)
+        self._apply_tooltip()
         self.update()
+
+    def set_native_detail(self, detail: str) -> None:
+        self._native_detail = str(detail)
+        self._apply_tooltip()
+
+    def _apply_tooltip(self) -> None:
+        parts = [self._tooltip]
+        if self._native_detail:
+            parts.append(f'当前原生值：\n{self._native_detail}')
+        if self._reason:
+            parts.append(self._reason)
+        self.setToolTip('\n'.join(parts))
 
     def values(self) -> tuple[float, float]:
         return self._x, self._y
@@ -293,8 +328,8 @@ class QuickColorPad(QtWidgets.QWidget):
         center_y = self.height() / 2.0
         grid_pen = QtGui.QPen(QtGui.QColor(rgba('#FFFFFF', 0.10)), 1)
         painter.setPen(grid_pen)
-        painter.drawLine(QtCore.QPointF(center_x, 8), QtCore.QPointF(center_x, self.height() - 8))
-        painter.drawLine(QtCore.QPointF(8, center_y), QtCore.QPointF(self.width() - 8, center_y))
+        painter.drawLine(QtCore.QPointF(center_x, 18), QtCore.QPointF(center_x, self.height() - 18))
+        painter.drawLine(QtCore.QPointF(30, center_y), QtCore.QPointF(self.width() - 30, center_y))
 
         strong_pen = QtGui.QPen(QtGui.QColor(rgba('#FFFFFF', 0.22)), 1)
         painter.setPen(strong_pen)
@@ -311,11 +346,22 @@ class QuickColorPad(QtWidgets.QWidget):
         font = painter.font()
         font.setPointSizeF(9.0)
         painter.setFont(font)
-        painter.drawText(QtCore.QRectF(8, 4, 60, 14), Qt.AlignLeft | Qt.AlignVCenter, '冷暖')
+        # 上品红 / 下绿 / 左暖 / 右冷：与原生 Y、M 位移的正负方向一致。
         painter.drawText(
-            QtCore.QRectF(8, self.height() - 18, 80, 14),
-            Qt.AlignLeft | Qt.AlignVCenter,
-            '品红 / 绿',
+            QtCore.QRectF(0, 3, self.width(), 14),
+            Qt.AlignHCenter | Qt.AlignVCenter,
+            '品红',
+        )
+        painter.drawText(
+            QtCore.QRectF(0, self.height() - 17, self.width(), 14),
+            Qt.AlignHCenter | Qt.AlignVCenter,
+            '绿',
+        )
+        painter.drawText(QtCore.QRectF(4, center_y - 8, 26, 16), Qt.AlignLeft | Qt.AlignVCenter, '暖')
+        painter.drawText(
+            QtCore.QRectF(self.width() - 30, center_y - 8, 26, 16),
+            Qt.AlignRight | Qt.AlignVCenter,
+            '冷',
         )
         painter.end()
 
@@ -416,8 +462,8 @@ class QuickPanel(QtWidgets.QWidget):
         readouts = QtWidgets.QHBoxLayout()
         readouts.setContentsMargins(0, 0, 0, 0)
         readouts.setSpacing(8)
-        for key, text in (('print_balance_y', '冷暖'), ('print_balance_m', '品红/绿')):
-            label = QtWidgets.QLabel(f'{text} 0')
+        for key, text in (('print_balance_y', '冷暖'), ('print_balance_m', '品红')):
+            label = QtWidgets.QLabel(f'{text} 0 CC')
             label.setObjectName('deckValue')
             label.setFont(tabular_font())
             label.setAlignment(Qt.AlignCenter)
@@ -446,9 +492,8 @@ class QuickPanel(QtWidgets.QWidget):
             label = self._pad_readouts.get(key)
             if label is None:
                 continue
-            prefix = '冷暖' if key == 'print_balance_y' else '品红/绿'
-            sign = '+' if value > 0 else ''
-            label.setText(f'{prefix} {sign}{value:.0f}')
+            prefix = '冷暖' if key == 'print_balance_y' else '品红'
+            label.setText(f'{prefix} {_format_cc(value)}')
 
     # ── 对外 ────────────────────────────────────────────────
     def set_intents(self, intent: Mapping[str, float]) -> None:
@@ -491,6 +536,16 @@ class QuickPanel(QtWidgets.QWidget):
                 disabled.get('print_balance_y') or disabled.get('print_balance_m') or ''
             )
             self._pad.set_available(not reason, reason)
+
+    def set_native_details(self, details: Mapping[str, str]) -> None:
+        for name, row in self._rows.items():
+            row.set_native_detail(str(details.get(name, '')))
+        if self._pad is not None:
+            parts = [
+                str(details.get(key, '')).strip()
+                for key in ('print_balance_y', 'print_balance_m')
+            ]
+            self._pad.set_native_detail('\n'.join(part for part in parts if part))
 
     def set_statuses(self, statuses: Mapping[str, str]) -> None:
         for name, row in self._rows.items():

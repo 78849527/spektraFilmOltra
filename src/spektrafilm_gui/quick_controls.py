@@ -200,6 +200,8 @@ PRINT_ONLY_AXES = frozenset({
     'print_balance_m',
 })
 
+PAD_CC_FULL_SCALE = 60.0
+
 DISABLED_REASON = '正片扫描模式：管线跳过印相阶段，本项不参与成像'
 
 
@@ -277,13 +279,21 @@ def expected_values(axis: QuickAxis, q: float, baseline: Mapping[str, Any]) -> d
     if name == 'print_balance_y':
         base = _number(_baseline_value(baseline, 'simulation.enlarger.y_filter_shift'))
         return {
-            'simulation.enlarger.y_filter_shift': _clamp(base + 60.0 * q / 100.0, -60.0, 60.0),
+            'simulation.enlarger.y_filter_shift': _clamp(
+                base + PAD_CC_FULL_SCALE * q / 100.0,
+                -PAD_CC_FULL_SCALE,
+                PAD_CC_FULL_SCALE,
+            ),
         }
 
     if name == 'print_balance_m':
         base = _number(_baseline_value(baseline, 'simulation.enlarger.m_filter_shift'))
         return {
-            'simulation.enlarger.m_filter_shift': _clamp(base + 60.0 * q / 100.0, -60.0, 60.0),
+            'simulation.enlarger.m_filter_shift': _clamp(
+                base + PAD_CC_FULL_SCALE * q / 100.0,
+                -PAD_CC_FULL_SCALE,
+                PAD_CC_FULL_SCALE,
+            ),
         }
 
     if name == 'color_density':
@@ -377,6 +387,7 @@ def expected_values(axis: QuickAxis, q: float, baseline: Mapping[str, Any]) -> d
 __all__ = [
     'AXES',
     'DISABLED_REASON',
+    'PAD_CC_FULL_SCALE',
     'PRINT_ONLY_AXES',
     'QUICK_LAYOUT',
     'QuickAxis',

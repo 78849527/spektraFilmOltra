@@ -113,6 +113,29 @@ def test_reset_quick_restores_baseline(quick_bundle) -> None:
     assert deck._quick_panel.row('tonal_contrast').value() == 0.0
 
 
+def test_color_pad_readouts_show_actual_cc(quick_bundle) -> None:
+    _app, _widgets, _controller, deck = quick_bundle
+    panel = deck._quick_panel
+    panel._pad.set_values(50.0, -25.0)
+    panel._update_pad_readouts(50.0, -25.0)
+
+    assert panel._pad_readouts['print_balance_y'].text() == '冷暖 +30 CC'
+    assert panel._pad_readouts['print_balance_m'].text() == '品红 -15 CC'
+
+
+def test_quick_tooltips_expose_native_values(quick_bundle) -> None:
+    _app, _widgets, _controller, deck = quick_bundle
+    deck.refresh()
+
+    row_tip = deck._quick_panel.row('print_brightness').toolTip()
+    assert '当前原生值' in row_tip
+    assert 'simulation.enlarger.print_exposure =' in row_tip
+
+    pad_tip = deck._quick_panel._pad.toolTip()
+    assert 'simulation.enlarger.y_filter_shift =' in pad_tip
+    assert 'simulation.enlarger.m_filter_shift =' in pad_tip
+
+
 def test_scan_film_disables_print_axes_and_pad(quick_bundle) -> None:
     _app, widgets, _controller, deck = quick_bundle
     widgets.simulation.set_scan_film_value(True)

@@ -164,6 +164,17 @@ def test_custom_status_detects_professional_edit() -> None:
     assert engine.status(repaired, 'scanner_clarity') == STATUS_NORMAL
 
 
+def test_native_summary_lists_every_owned_path() -> None:
+    state = _state()
+    engine = QuickEngine()
+    engine.capture(state)
+    for name, axis in AXES.items():
+        summary = engine.native_summary(state, name)
+        assert summary
+        for path in axis.owned:
+            assert f'{path} =' in summary, f'{name} missing {path}'
+
+
 def test_persistence_roundtrip() -> None:
     state = _state()
     engine = QuickEngine()

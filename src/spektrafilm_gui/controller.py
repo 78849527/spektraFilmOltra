@@ -176,6 +176,7 @@ class GuiController:
         self._preview_generation = 0
         self._last_preview_fingerprint: object | None = None
         self._pending_preview_fingerprint: object | None = None
+        self._preview_timer: QTimer | None = None
         self._auto_preview_scheduled = False
         self._pending_auto_preview = False
         self._active_simulation_reports_status = True
@@ -427,10 +428,15 @@ class GuiController:
             self._export_after_scan = False
 
     def request_auto_preview(self, *_args) -> None:
-        if self._auto_preview_scheduled:
-            return
+        timer = self._preview_timer
+        if timer is None:
+            timer = QTimer()
+            timer.setSingleShot(True)
+            timer.setInterval(PREVIEW_DEBOUNCE_MS)
+            timer.timeout.connect(self._run_scheduled_auto_preview)
+            self._preview_timer = timer
         self._auto_preview_scheduled = True
-        QTimer.singleShot(PREVIEW_DEBOUNCE_MS, self._run_scheduled_auto_preview)
+        timer.start()
 
     def _request_auto_preview_if_enabled(self) -> None:
         if not self._auto_preview_enabled() or self._current_preview_image is None:

@@ -36,7 +36,7 @@ from spektrafilm_gui.param_manifest import (
     SIMULATION_FIELDS,
     SPECIAL_FIELDS,
 )
-from spektrafilm_gui.quick_controls import DISABLED_REASON, disabled_axes
+from spektrafilm_gui.quick_controls import AXES, DISABLED_REASON, disabled_axes
 from spektrafilm_gui.quick_engine import QuickEngine
 from spektrafilm_gui.quick_panel import QuickPanel
 from spektrafilm_gui.state_bridge import apply_gui_state, collect_gui_state
@@ -1488,6 +1488,9 @@ class ParameterDeck(QtWidgets.QWidget):
                 return
             state = collect_gui_state(widgets=self._widgets)
         self._quick_panel.set_statuses(self._quick_engine.statuses(state))
+        self._quick_panel.set_native_details(
+            {name: self._quick_engine.native_summary(state, name) for name in AXES}
+        )
 
     def set_quick_state(self, raw) -> None:
         state = collect_gui_state(widgets=self._widgets)
