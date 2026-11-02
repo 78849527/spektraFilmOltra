@@ -15,7 +15,7 @@ from spektrafilm_gui import motion
 from spektrafilm_gui.editor_page import EditorPage
 from spektrafilm_gui.export_dialog import edit_export_settings
 from spektrafilm_gui.library_page import LibraryPage
-from spektrafilm_gui.library_store import LibraryItem, LibraryStore
+from spektrafilm_gui.library_store import LibraryItem, LibraryStore, is_raw_image
 from spektrafilm_gui.napari_layout import (
     _DropOverlay,
     _request_dark_title_bar,
@@ -131,6 +131,7 @@ class WorkspaceWindow(QMainWindow):
         self.editor_page.film_selected.connect(self._on_film_selected)
         self.editor_page.paper_selected.connect(self._on_paper_selected)
         self.editor_page.profile_changed.connect(self._on_deck_profile_changed)
+        self.editor_page.quick_changed.connect(self._schedule_persist)
         self.editor_page.strip_item_selected.connect(self.open_item)
         set_scale = getattr(self._controller, 'set_preview_render_scale', None)
         if callable(set_scale):
@@ -178,6 +179,13 @@ class WorkspaceWindow(QMainWindow):
             QMessageBox.warning(self, '打开照片', '这张照片的源文件已被移动或删除。\n\n请重新导入，或把文件放回原位置。')
             return
 
+        # 以磁盘上的真实后缀为准，修复历史存档里错误的 is_raw 标记。
+        raw_item = is_raw_image(item.path)
+        if item.is_raw != raw_item:
+            repaired = self.store.update_item(item_id, save=True, is_raw=raw_item)
+            if repaired is not None:
+                item = repaired
+
         self._persist_active_state()
         state = self._state_for_item(item)
         # 显示/预览偏好是全局的，不能被某张照片的存档带跑
@@ -195,6 +203,8 @@ class WorkspaceWindow(QMainWindow):
         motion.fade_in(self.editor_page.inspector, duration=180, start=0.5)
         motion.fade_in(self.editor_page.preset_rail, duration=180, start=0.5)
         self.setWindowTitle('Spektrafilm')
+        quick_raw = item.state.get('quick') if isinstance(item.state, dict) else None
+        self.editor_page.set_quick_state(quick_raw)
         display_item = self._display_item(item, state)
         self.editor_page.set_photo(display_item, self._strip_items_for(display_item))
         self.editor_page.set_histogram(None)
@@ -203,7 +213,7 @@ class WorkspaceWindow(QMainWindow):
         QApplication.setOverrideCursor(Qt.WaitCursor)
         load_failed = False
         try:
-            if item.is_raw:
+            if raw_item:
                 try:
                     self._widgets.load_raw.set_path(item.path)
                 except AttributeError:
@@ -271,6 +281,7 @@ class WorkspaceWindow(QMainWindow):
         """只比较“照片调整”，忽略全局显示/预览/保存偏好。"""
         fingerprint = copy.deepcopy(data)
         fingerprint.pop('display', None)
+        fingerprint.pop('quick', None)
         simulation = fingerprint.get('simulation')
         if isinstance(simulation, dict):
             for key in ('auto_preview', 'scan_film', 'saving_color_space', 'saving_cctf_encoding'):
@@ -292,6 +303,7 @@ class WorkspaceWindow(QMainWindow):
             return
         state = collect_gui_state(widgets=self._widgets)
         data = gui_state_to_dict(state)
+        data['quick'] = self.editor_page.quick_state_dict()
         try:
             default_data = gui_state_to_dict(load_default_gui_state())
         except (OSError, ValueError, TypeError):
@@ -403,6 +415,7 @@ class WorkspaceWindow(QMainWindow):
         apply_gui_state(load_default_gui_state(), widgets=self._widgets)
         self._widgets.display.set_state(global_display)
         self._widgets.simulation.set_auto_preview_value(global_auto_preview)
+        self.editor_page.reset_quick_state()
         self.editor_page.refresh_after_state_change()
         self._schedule_persist()
         self._show_status('已重置为默认参数')

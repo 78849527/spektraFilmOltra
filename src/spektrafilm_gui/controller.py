@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from importlib import import_module
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
@@ -12,6 +14,7 @@ from spektrafilm_gui import controller_persistence as persistence_actions
 from spektrafilm_gui import controller_profile_sync as profile_sync
 from spektrafilm_gui import controller_runtime as runtime
 from spektrafilm_gui.input_color import detect_input_color_space
+from spektrafilm_gui.library_store import RAW_SUFFIXES
 from spektrafilm_gui.export_settings import ExportSettings, load_export_settings, save_export_settings
 from spektrafilm_gui.controller_layers import (
     INPUT_LAYER_NAME,
@@ -20,6 +23,7 @@ from spektrafilm_gui.controller_layers import (
 )
 from spektrafilm_gui.persistence import (
     clear_saved_default_gui_state,
+    gui_state_to_dict,
     load_dialog_dir,
     load_gui_state_from_path,
     save_default_gui_state,
@@ -31,12 +35,6 @@ from spektrafilm_gui.napari_layout import dialog_parent, reset_viewer_camera, se
 from spektrafilm_gui.params_mapper import build_params_from_state
 from spektrafilm_gui.state_bridge import apply_gui_state, collect_gui_state
 from spektrafilm_gui.widgets import WidgetBundle
-
-RAW_SUFFIXES = frozenset({
-    '.cr2', '.cr3', '.nef', '.arw', '.dng', '.raf', '.orf', '.rw2', '.pef',
-    '.srw', '.3fr', '.iiq', '.x3f', '.erf', '.mef', '.mos', '.mrw', '.nrw',
-    '.rwl', '.srf', '.sr2',
-})
 
 OUTPUT_FLOAT_DATA_KEY = 'pipeline_float_output'
 OUTPUT_COLOR_SPACE_KEY = 'pipeline_output_color_space'
@@ -56,6 +54,8 @@ SimulationRequest = runtime.SimulationRequest
 SimulationResult = runtime.SimulationResult
 STARTUP_PREVIEW_ASPECT_RATIO = (3, 2)
 DISPLAY_PREVIEW_MAX_SIZE = 1600
+PREVIEW_SIMULATION_MAX_EDGE = 1920
+PREVIEW_DEBOUNCE_MS = 120
 PREVIEW_RENDER_SCALES = (1.0, 0.5, 0.25)
 
 
@@ -173,6 +173,9 @@ class GuiController:
         self._last_input_was_rgb = False
         self._preview_render_scale = 0.5
         self._preview_scale_cache: dict[float, np.ndarray] = {}
+        self._preview_generation = 0
+        self._last_preview_fingerprint: object | None = None
+        self._pending_preview_fingerprint: object | None = None
         self._auto_preview_scheduled = False
         self._pending_auto_preview = False
         self._active_simulation_reports_status = True
@@ -183,8 +186,6 @@ class GuiController:
         self._export_after_scan = False
         self._export_pending_after_simulation = False
         self._export_settings = load_export_settings()
-        self._quick_mode_active = False
-        self._active_simulation_quick_mode = False
 
     def show_startup_placeholder(self) -> None:
         if self._white_border_layer() is not None:
@@ -207,6 +208,9 @@ class GuiController:
         self._home_input_stack()
 
     def load_input_image(self, path: str) -> None:
+        if Path(path).suffix.lower() in RAW_SUFFIXES:
+            self.load_raw_image(path)
+            return
         color_space, decode = detect_input_color_space(path)
         self._apply_input_color_space(color_space, decode)
         self._last_input_was_rgb = True
@@ -247,6 +251,11 @@ class GuiController:
             self.load_input_image(path)
 
     def load_raw_image(self, path: str) -> None:
+        # 只有 RAW 后缀才允许进 rawpy；PNG/JPEG 等交给普通图像载入，
+        # 避免把编码图像塞进 LibRaw 导致进程崩溃。
+        if Path(path).suffix.lower() not in RAW_SUFFIXES:
+            self.load_input_image(path)
+            return
         # RAW 解码到线性 ProPhoto；如果上一张是普通 RGB 图，先恢复 RAW 的线性默认值。
         if self._last_input_was_rgb:
             self._apply_input_color_space('ProPhoto RGB', False)
@@ -269,7 +278,7 @@ class GuiController:
                 output_cctf_encoding=gui_state.input_image.io.input_cctf_decoding,
                 lens_info_out=lens_info,
             )
-        except (OSError, ValueError) as exc:
+        except Exception as exc:
             QMessageBox.critical(dialog_parent(self._viewer), '载入 RAW', f'RAW 图像载入失败。\n\n{exc}')
             set_status(self._viewer, 'RAW 载入失败')
             return
@@ -387,9 +396,6 @@ class GuiController:
         if callback not in self._simulation_failed_callbacks:
             self._simulation_failed_callbacks.append(callback)
 
-    def set_quick_mode_active(self, active: bool) -> None:
-        self._quick_mode_active = bool(active)
-
     def current_output_display_image(self) -> np.ndarray | None:
         layer = self._output_layer()
         if layer is None:
@@ -424,7 +430,7 @@ class GuiController:
         if self._auto_preview_scheduled:
             return
         self._auto_preview_scheduled = True
-        QTimer.singleShot(0, self._run_scheduled_auto_preview)
+        QTimer.singleShot(PREVIEW_DEBOUNCE_MS, self._run_scheduled_auto_preview)
 
     def _request_auto_preview_if_enabled(self) -> None:
         if not self._auto_preview_enabled() or self._current_preview_image is None:
@@ -774,6 +780,8 @@ class GuiController:
         )
         self._current_input_image = image
         self._preview_scale_cache.clear()
+        self._preview_generation += 1
+        self._last_preview_fingerprint = None
         self._current_preview_image = self._scaled_preview_image()
         self._layers.set_or_add_input_preview_layer(
             preview_display_image,
@@ -799,15 +807,19 @@ class GuiController:
         if image is None:
             return None
         scale = self._preview_render_scale
-        if scale >= 1.0:
+        height, width = image.shape[:2]
+        long_edge = max(int(height), int(width))
+        if scale >= 1.0 and long_edge <= PREVIEW_SIMULATION_MAX_EDGE:
             return image
-        cached = self._preview_scale_cache.get(scale)
+        target = min(
+            max(1, int(round(long_edge * scale))),
+            PREVIEW_SIMULATION_MAX_EDGE,
+        )
+        cached = self._preview_scale_cache.get(target)
         if cached is not None:
             return cached
-        height, width = image.shape[:2]
-        target = max(1, int(round(max(int(height), int(width)) * scale)))
         scaled = self._resize_for_preview(image, max_size=target)
-        self._preview_scale_cache[scale] = scaled
+        self._preview_scale_cache[target] = scaled
         return scaled
 
     def set_preview_render_scale(self, scale: float) -> None:
@@ -819,6 +831,9 @@ class GuiController:
             value = 1.0
         changed = value != self._preview_render_scale
         self._preview_render_scale = value
+        if changed:
+            self._preview_generation += 1
+            self._last_preview_fingerprint = None
         self._current_preview_image = self._scaled_preview_image()
         if changed and self._current_preview_image is not None:
             self.request_auto_preview()
@@ -847,7 +862,30 @@ class GuiController:
         if self._active_simulation_worker is not None:
             self._pending_auto_preview = True
             return
+        fingerprint = self._preview_fingerprint()
+        if fingerprint is not None and fingerprint == self._last_preview_fingerprint:
+            self._pending_auto_preview = False
+            return
+        self._pending_preview_fingerprint = fingerprint
         self._run_preview(report_status=True)
+
+    def _preview_fingerprint(self) -> object | None:
+        """当前预览输入 + GUI 状态的稳定指纹，用于跳过重复渲染。"""
+        image = self._current_preview_image
+        if image is None:
+            return None
+        try:
+            state = collect_gui_state(widgets=self._widgets)
+            payload = gui_state_to_dict(state)
+            payload['selection'] = {
+                'film_stock': str(getattr(state.selection, 'film_stock', '')),
+                'print_paper': str(getattr(state.selection, 'print_paper', '')),
+            }
+            encoded = json.dumps(payload, sort_keys=True, default=str)
+        except (AttributeError, TypeError, ValueError, KeyError):
+            return None
+        digest = hashlib.sha1(encoded.encode('utf-8')).hexdigest()
+        return (self._preview_generation, digest)
 
     def _replay_pending_auto_preview(self) -> None:
         if not self._pending_auto_preview:
@@ -1030,7 +1068,6 @@ class GuiController:
         self._active_simulation_worker = worker
         self._active_simulation_label = mode_label
         self._active_simulation_reports_status = report_status
-        self._active_simulation_quick_mode = bool(self._quick_mode_active)
         self._set_simulation_controls_enabled(False)
         scale = 1.0 if source_layer_name == INPUT_LAYER_NAME else self._preview_render_scale
         for callback in tuple(self._simulation_started_callbacks):
@@ -1056,26 +1093,15 @@ class GuiController:
         display = np.asarray(result.display_image)
         return tuple(display.shape[:2]) == tuple(np.asarray(image).shape[:2])
 
-    @staticmethod
-    def _is_degenerate(image) -> bool:
-        try:
-            data = np.asarray(image, dtype=np.float32)
-        except (TypeError, ValueError):
-            return False
-        if data.size == 0:
-            return True
-        mean = float(data.mean())
-        std = float(data.std())
-        return mean < 0.02 or mean > 0.98 or std < 0.01
-
     def _on_simulation_finished(self, result: SimulationResult) -> None:
         report_status = self._active_simulation_reports_status
-        quick_mode = self._active_simulation_quick_mode
         self._active_simulation_worker = None
         self._active_simulation_label = None
         self._active_simulation_reports_status = True
-        self._active_simulation_quick_mode = False
         self._set_simulation_controls_enabled(True)
+        if result.mode_label == 'Preview':
+            self._last_preview_fingerprint = self._pending_preview_fingerprint
+            self._pending_preview_fingerprint = None
         self._set_or_add_output_layer(
             result.display_image,
             float_image=result.float_image,
@@ -1084,10 +1110,7 @@ class GuiController:
             use_display_transform=result.use_display_transform,
         )
         if report_status:
-            if quick_mode and self._is_degenerate(result.float_image):
-                set_status(self._viewer, '快速模式提示：画面接近全黑/全白/全灰，请回调滑块')
-            else:
-                set_status(self._viewer, f'{tr(result.mode_label)}完成。{result.status_message}')
+            set_status(self._viewer, f'{tr(result.mode_label)}完成。{result.status_message}')
         for callback in tuple(self._simulation_finished_callbacks):
             try:
                 callback(result)

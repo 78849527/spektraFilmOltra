@@ -12,6 +12,7 @@ QFormLayout = QtWidgets.QFormLayout
 QHBoxLayout = QtWidgets.QHBoxLayout
 QLabel = QtWidgets.QLabel
 QLineEdit = QtWidgets.QLineEdit
+QMessageBox = QtWidgets.QMessageBox
 QPushButton = QtWidgets.QPushButton
 QSizePolicy = QtWidgets.QSizePolicy
 QVBoxLayout = QtWidgets.QVBoxLayout
@@ -48,6 +49,7 @@ from spektrafilm_gui.state import (
     clone_state_section,
 )
 from spektrafilm_gui.persistence import load_dialog_dir, save_dialog_dir
+from spektrafilm_gui.library_store import RAW_SUFFIXES, RGB_SUFFIXES
 from spektrafilm_gui.theme_palette import SIZE_FOOTER_ITEM_SPACING
 from spektrafilm_gui.options import RawWhiteBalance
 from spektrafilm_gui.widget_editors import BoolEditor, EnumEditor, FloatEditor, FloatTupleEditor, IntEditor, IntTupleEditor, ProfileEnumEditor, SliderRowEditor
@@ -93,6 +95,9 @@ _AUXILIARY_FIELD_SPECS = {
         tooltip='Scan the image for print, ie white and black correction of the scanner are active, and glare is deactivated.',
     ),
 }
+_RAW_FILE_FILTER = 'RAW 文件 (' + ' '.join(f'*{suffix}' for suffix in sorted(RAW_SUFFIXES)) + ')'
+_RGB_FILE_FILTER = '图像文件 (' + ' '.join(f'*{suffix}' for suffix in sorted(RGB_SUFFIXES)) + ')'
+
 _SIMULATION_ACTION_BUTTON_SPECS = {
     'preview': {
         'text': '预览',
@@ -455,8 +460,20 @@ class LoadRawSection(QWidget):
         self.setLayout(_build_collapsible_form_section(self.TITLE, form, expanded=False))
 
     def _choose_file(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, _normalize_ui_text('选择 RAW 输入文件'), load_dialog_dir('raw_input'))
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            _normalize_ui_text('选择 RAW 输入文件'),
+            load_dialog_dir('raw_input'),
+            _RAW_FILE_FILTER,
+        )
         if not path:
+            return
+        if Path(path).suffix.lower() not in RAW_SUFFIXES:
+            QMessageBox.warning(
+                self,
+                '载入 RAW',
+                '这里只能选择 RAW 文件。PNG / JPEG / TIFF 请用下方的“导入 RGB 图像”。',
+            )
             return
         save_dialog_dir('raw_input', str(Path(path).parent))
         self.set_path(path)
@@ -465,6 +482,13 @@ class LoadRawSection(QWidget):
     def _reprocess_raw(self) -> None:
         path = self.file_path.text().strip()
         if not path:
+            return
+        if Path(path).suffix.lower() not in RAW_SUFFIXES:
+            QMessageBox.warning(
+                self,
+                '载入 RAW',
+                '当前路径不是 RAW 文件，不能执行 RAW 解码。',
+            )
             return
         self.load_requested.emit(path)
 
@@ -636,8 +660,20 @@ class FilePickerSection(QWidget):
         _set_single_collapsible_layout(self, 'Import RGB', content, expanded=False)
 
     def _choose_file(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, _normalize_ui_text('选择输入图像'), load_dialog_dir('rgb_input'))
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            _normalize_ui_text('选择输入图像'),
+            load_dialog_dir('rgb_input'),
+            _RGB_FILE_FILTER,
+        )
         if not path:
+            return
+        if Path(path).suffix.lower() not in RGB_SUFFIXES:
+            QMessageBox.warning(
+                self,
+                '导入 RGB 图像',
+                '这里只能选择普通图像文件。RAW 请用上方的“选择文件”走 RAW 解码。',
+            )
             return
         save_dialog_dir('rgb_input', str(Path(path).parent))
         self.file_path.setText(path)

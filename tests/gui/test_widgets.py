@@ -207,6 +207,23 @@ def test_load_raw_section_reprocess_button_uses_selected_path(monkeypatch) -> No
     assert section.reprocess_button.isEnabled() is False
 
 
+def test_load_raw_section_reprocess_refuses_non_raw_path(monkeypatch) -> None:
+    section, emitted = _make_load_raw_section()
+    warnings: list[tuple] = []
+    monkeypatch.setattr(
+        widgets_module.QMessageBox,
+        'warning',
+        staticmethod(lambda *args: warnings.append(args)),
+    )
+
+    widgets_module.LoadRawSection.set_path(section, 'C:/tmp/example.png')
+    section.reprocess_button.click()
+
+    assert emitted == []
+    assert warnings
+    assert warnings[0][1] == '载入 RAW'
+
+
 def test_file_picker_choose_file_updates_path_and_emits_selected_file(monkeypatch) -> None:
     section, created_buttons = _make_filepicker_section(monkeypatch)
     monkeypatch.setattr(

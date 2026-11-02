@@ -36,14 +36,9 @@ from spektrafilm_gui.param_manifest import (
     SIMULATION_FIELDS,
     SPECIAL_FIELDS,
 )
-from spektrafilm_gui.quick_mode import (
-    CONTROLS,
-    QUICK_GROUPS,
-    QuickControl,
-    QuickParams,
-    apply_quick_control,
-    quick_from_state,
-)
+from spektrafilm_gui.quick_controls import DISABLED_REASON, disabled_axes
+from spektrafilm_gui.quick_engine import QuickEngine
+from spektrafilm_gui.quick_panel import QuickPanel
 from spektrafilm_gui.state_bridge import apply_gui_state, collect_gui_state
 from spektrafilm_gui.widget_sections import LOAD_RAW_FIELDS
 from spektrafilm_gui.theme_oflim import (
@@ -62,7 +57,7 @@ from spektrafilm_gui.theme_oflim import (
     rgba,
 )
 from spektrafilm_gui.ui_names import technical_label_for, tip_for
-from spektrafilm_gui.widget_primitives import platform_default_font, tabular_font
+from spektrafilm_gui.widget_primitives import WheelSafeSlider, platform_default_font, tabular_font
 
 Qt = QtCore.Qt
 
@@ -306,8 +301,29 @@ _DISPLAY_SKIPPED = {'preview_max_size'}
 
 DECK_STYLE = f"""
 QWidget#paramDeck {{
-    background: {SURFACE_1};
+    background: {SURFACE_0};
     border-left: 1px solid {HAIRLINE};
+}}
+/* 参数页滚动条：细而无衬底，悬停可拖 */
+QScrollArea QScrollBar:vertical {{
+    background: transparent;
+    width: 6px;
+    margin: 4px 2px 4px 0;
+}}
+QScrollArea QScrollBar::handle:vertical {{
+    background: {rgba('#FFFFFF', 0.14)};
+    border-radius: 3px;
+    min-height: 32px;
+}}
+QScrollArea QScrollBar::handle:vertical:hover {{ background: {rgba('#FFFFFF', 0.24)}; }}
+QScrollArea QScrollBar::add-line:vertical,
+QScrollArea QScrollBar::sub-line:vertical,
+QScrollArea QScrollBar::add-page:vertical,
+QScrollArea QScrollBar::sub-page:vertical {{
+    background: none;
+    height: 0px;
+    width: 0px;
+    border: none;
 }}
 QWidget#deckHeader {{ background: transparent; }}
 QLabel#deckBadge {{
@@ -497,7 +513,7 @@ class SliderRow(_Row):
             self._baseline = max(spec.lo, min(spec.hi, self._baseline))
             self._write(self._baseline)
 
-        self.slider = QtWidgets.QSlider(Qt.Horizontal)
+        self.slider = WheelSafeSlider(Qt.Horizontal)
         self.slider.setObjectName('deckSlider')
         self.slider.setRange(0, 1000)
         self.slider.setFixedHeight(14)
@@ -642,105 +658,6 @@ class SliderRow(_Row):
             return abs(float(self._source.value) - self._baseline) > 1e-6
         except (TypeError, ValueError):
             return False
-
-
-class QuickSliderRow(_Row):
-    """快速模式滑块：自带读数、双击复位、非默认值黄铜高亮。"""
-
-    def __init__(self, control: QuickControl, value: float, on_change, *, parent=None):
-        super().__init__(control.label, control.name, height=ROW_HEIGHT, parent=parent)
-        self._control = control
-        self._on_change = on_change
-        self._default = float(control.default)
-        self._syncing = False
-        self.slider = QtWidgets.QSlider(Qt.Horizontal)
-        self.slider.setObjectName('deckSlider')
-        self.slider.setRange(0, 1000)
-        self.slider.setFixedHeight(14)
-        self.slider.setCursor(Qt.PointingHandCursor)
-        self._layout.addWidget(self.slider)
-        self.slider.valueChanged.connect(self._on_slider)
-        self.slider.sliderReleased.connect(self._commit)
-        self._commit_timer = QtCore.QTimer(self)
-        self._commit_timer.setSingleShot(True)
-        self._commit_timer.setInterval(150)
-        self._commit_timer.timeout.connect(self._commit)
-        self._label.mouseDoubleClickEvent = self._reset  # type: ignore[method-assign]
-        self.set_value(value)
-
-    def _to_position(self, value: float) -> int:
-        span = self._control.hi - self._control.lo
-        if span <= 0:
-            return 0
-        ratio = (float(value) - self._control.lo) / span
-        return max(0, min(1000, round(ratio * 1000)))
-
-    def _from_position(self, position: int) -> float:
-        span = self._control.hi - self._control.lo
-        value = self._control.lo + span * (position / 1000.0)
-        step = self._control.step or 0.01
-        value = round(value / step) * step
-        return max(self._control.lo, min(self._control.hi, value))
-
-    def _format(self, value: float) -> str:
-        decimals = max(0, int(self._control.decimals))
-        value = float(value)
-        if abs(value) < 0.5 * 10 ** (-decimals):
-            value = 0.0
-        text = f'{value:.{decimals}f}'
-        if decimals > 0 and '.' in text:
-            text = text.rstrip('0').rstrip('.')
-        if self._control.lo < 0 and value > 0:
-            text = f'+{text}'
-        return f'{text}{self._control.suffix}'
-
-    def set_value(self, value: float) -> None:
-        value = max(self._control.lo, min(self._control.hi, float(value)))
-        self._syncing = True
-        try:
-            self.slider.blockSignals(True)
-            self.slider.setValue(self._to_position(value))
-            self.slider.blockSignals(False)
-        finally:
-            self._syncing = False
-        self._value.setText(self._format(value))
-        self._paint_state(value)
-
-    def value(self) -> float:
-        return self._from_position(self.slider.value())
-
-    def _on_slider(self, position: int) -> None:
-        if self._syncing:
-            return
-        value = self._from_position(position)
-        self._value.setText(self._format(value))
-        self._paint_state(value)
-        self._commit_timer.start()
-
-    def _commit(self) -> None:
-        self._commit_timer.stop()
-        if self._on_change is not None:
-            self._on_change(self.value())
-
-    def _reset(self, event) -> None:  # noqa: N802 - Qt API name
-        self._commit_timer.stop()
-        self.set_value(self._default)
-        if self._on_change is not None:
-            self._on_change(self._default)
-        motion.fade_in(self._value, duration=140, start=0.3)
-        event.accept()
-
-    def _paint_state(self, value: float) -> None:
-        dirty = abs(float(value) - self._default) > 1e-6
-        self._value.setProperty('dirty', 'true' if dirty else 'false')
-        self._value.style().unpolish(self._value)
-        self._value.style().polish(self._value)
-        self.slider.setProperty('dirty', 'true' if dirty else 'false')
-        self.slider.style().unpolish(self.slider)
-        self.slider.style().polish(self.slider)
-
-    def is_dirty(self) -> bool:
-        return abs(self.value() - self._default) > 1e-6
 
 
 class NumberRow(_Row):
@@ -1300,11 +1217,12 @@ class Tabs(QtWidgets.QWidget):
 class ParameterDeck(QtWidgets.QWidget):
     reset_requested = QtCore.Signal()
     profile_changed = QtCore.Signal(str, str)
+    quick_changed = QtCore.Signal()
 
     def __init__(self, widgets, controller, *, parent=None):
         super().__init__(parent)
         self.setObjectName('paramDeck')
-        self.setMinimumWidth(310)
+        self.setMinimumWidth(300)
         self._widgets = widgets
         self._controller = controller
         self._rows: dict[tuple[str, str], _Row] = {}
@@ -1312,8 +1230,8 @@ class ParameterDeck(QtWidgets.QWidget):
         self._raw_action_button: QtWidgets.QPushButton | None = None
         self._condition_pairs: list[tuple[ToggleRow, list[_Row]]] = []
         self._mode = 'pro'
-        self._quick_params = QuickParams()
-        self._quick_rows: dict[str, QuickSliderRow] = {}
+        self._quick_engine = QuickEngine()
+        self._quick_panel: QuickPanel | None = None
         self._build()
 
     def _build(self) -> None:
@@ -1388,42 +1306,10 @@ class ParameterDeck(QtWidgets.QWidget):
         return body
 
     def _build_quick_page(self) -> QtWidgets.QWidget:
-        self._quick_params = QuickParams()
-        scroll = QtWidgets.QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-
-        content = QtWidgets.QWidget()
-        outer = QtWidgets.QVBoxLayout(content)
-        outer.setContentsMargins(0, 0, 0, 16)
-        outer.setSpacing(0)
-        card = QtWidgets.QFrame()
-        card.setObjectName('deckCard')
-        inner = QtWidgets.QVBoxLayout(card)
-        inner.setContentsMargins(12, 10, 12, 11)
-        inner.setSpacing(3)
-        inner.setAlignment(Qt.AlignTop)
-
-        for group_title, names in QUICK_GROUPS:
-            if inner.count() > 0:
-                inner.addSpacing(6)
-            inner.addWidget(GroupLabel(group_title))
-            for name in names:
-                control = CONTROLS[name]
-                row = QuickSliderRow(
-                    control,
-                    self._quick_params.value(name),
-                    lambda value, control_name=name: self._on_quick_change(control_name, value),
-                )
-                self._quick_rows[name] = row
-                inner.addWidget(row)
-
-        outer.addWidget(card)
-        outer.addStretch(1)
-        scroll.setWidget(content)
-        return scroll
+        self._quick_panel = QuickPanel()
+        self._quick_panel.axis_changed.connect(self._on_quick_axis)
+        self._quick_panel.reset_all_requested.connect(self._reset_quick)
+        return self._quick_panel
 
     def _build_histogram(self) -> QtWidgets.QWidget:
         card = QtWidgets.QFrame()
@@ -1560,39 +1446,81 @@ class ParameterDeck(QtWidgets.QWidget):
         return entries
 
     def _on_change(self) -> None:
+        if self._mode == 'quick':
+            self._refresh_quick_status()
         self._update_badge()
         request = getattr(self._controller, 'request_auto_preview', None)
         if callable(request):
             request()
 
-    def _on_quick_change(self, name: str, value: float) -> None:
-        self._quick_params.set(name, value)
+    def _on_quick_axis(self, name: str, value: float) -> None:
         state = collect_gui_state(widgets=self._widgets)
-        new_state = apply_quick_control(state, self._quick_params, name)
-        apply_gui_state(new_state, widgets=self._widgets)
+        if self._quick_engine.profile_changed(state):
+            state = self._quick_engine.rebase(state)
+        state = self._quick_engine.set_axis(state, name, value)
+        apply_gui_state(state, widgets=self._widgets)
+        self._quick_panel.set_intent(name, value)
         self._sync_pro_rows()
         self._apply_conditions()
+        self._refresh_quick_availability(state)
         self._on_change()
+        self.quick_changed.emit()
+
+    def _reset_quick(self) -> None:
+        state = collect_gui_state(widgets=self._widgets)
+        if self._quick_engine.profile_changed(state):
+            self._quick_engine.capture(state)
+        state = self._quick_engine.restore_baseline(state)
+        apply_gui_state(state, widgets=self._widgets)
+        self._quick_panel.set_intents(self._quick_engine.intent)
+        self._sync_pro_rows()
+        self._apply_conditions()
+        self._refresh_quick_availability(state)
+        self._on_change()
+        self.quick_changed.emit()
+
+    def _refresh_quick_status(self, state=None) -> None:
+        if self._quick_panel is None:
+            return
+        if state is None:
+            # 还没建立基线、且不在快速页时，没必要为专业编辑去收集整份状态。
+            if self._quick_engine.profile is None and self._mode != 'quick':
+                return
+            state = collect_gui_state(widgets=self._widgets)
+        self._quick_panel.set_statuses(self._quick_engine.statuses(state))
+
+    def set_quick_state(self, raw) -> None:
+        state = collect_gui_state(widgets=self._widgets)
+        self._quick_engine.load(raw, state)
+        if self._quick_panel is not None:
+            self._quick_panel.set_intents(self._quick_engine.intent)
+        self._refresh_quick_availability(state)
+        self._refresh_quick_status(state)
+        self._update_badge()
+
+    def quick_state_dict(self) -> dict:
+        return self._quick_engine.to_dict()
+
+    def reset_quick_state(self) -> None:
+        state = collect_gui_state(widgets=self._widgets)
+        self._quick_engine.capture(state, clear_intent=True)
+        if self._quick_panel is not None:
+            self._quick_panel.set_intents(self._quick_engine.intent)
+        self._refresh_quick_availability(state)
+        self._refresh_quick_status(state)
+        self._update_badge()
 
     def _sync_pro_rows(self) -> None:
         for row in self._rows.values():
             row.sync_from_source()
 
-    def _sync_quick_from_state(self) -> None:
-        self._quick_params = quick_from_state(collect_gui_state(widgets=self._widgets))
-        for name, row in self._quick_rows.items():
-            row.set_value(self._quick_params.value(name))
-
     def _show_mode(self, index: int) -> None:
         mode = 'quick' if index == 0 else 'pro'
         self._mode = mode
         self._mode_stack.setCurrentIndex(index)
-        if mode == 'quick':
-            self._sync_quick_from_state()
+        self._refresh_quick_status()
+        self._refresh_quick_availability()
         self._update_badge()
-        setter = getattr(self._controller, 'set_quick_mode_active', None)
-        if callable(setter):
-            setter(mode == 'quick')
         page = self._mode_stack.currentWidget()
         if page is not None:
             motion.fade_in(page, duration=motion.DURATION_QUICK)
@@ -1674,7 +1602,7 @@ class ParameterDeck(QtWidgets.QWidget):
 
     def _update_badge(self) -> None:
         if self._mode == 'quick':
-            count = sum(1 for row in self._quick_rows.values() if row.is_dirty())
+            count = self._quick_engine.dirty_count()
         else:
             count = sum(1 for row in self._rows.values() if row.is_dirty())
         self._badge.setText(str(count) if count else '')
@@ -1700,12 +1628,33 @@ class ParameterDeck(QtWidgets.QWidget):
                 return
 
     def refresh(self) -> None:
+        state = None
+        if self._mode == 'quick' or self._quick_engine.profile is not None:
+            state = collect_gui_state(widgets=self._widgets)
+            if self._quick_engine.profile_changed(state):
+                state = self._quick_engine.rebase(state)
+                apply_gui_state(state, widgets=self._widgets)
+                if self._quick_panel is not None:
+                    self._quick_panel.set_intents(self._quick_engine.intent)
         self._sync_pro_rows()
         self._apply_conditions()
-        if self._mode == 'quick':
-            self._sync_quick_from_state()
+        self._refresh_quick_status(state)
+        self._refresh_quick_availability(state)
         self._update_raw_availability()
         self._update_badge()
+
+    def _refresh_quick_availability(self, state=None) -> None:
+        if self._quick_panel is None:
+            return
+        if state is None:
+            if self._quick_engine.profile is None and self._mode != 'quick':
+                return
+            state = collect_gui_state(widgets=self._widgets)
+        scan_film = bool(getattr(state.simulation.io, 'scan_film', False))
+        disabled = {
+            name: DISABLED_REASON for name in disabled_axes(scan_film=scan_film)
+        }
+        self._quick_panel.set_availability(disabled)
 
     def _update_raw_availability(self) -> None:
         from spektrafilm_gui.library_store import is_raw_image

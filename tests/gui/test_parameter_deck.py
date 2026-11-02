@@ -63,6 +63,24 @@ def test_deck_film_selection_applies_profile_defaults(deck_bundle) -> None:
     assert events == [('film_stock', 'kodak_ektachrome_100')]
 
 
+def test_deck_profile_switch_disables_print_quick_axes(deck_bundle) -> None:
+    _app, widgets, _controller, deck = deck_bundle
+    deck._mode_tabs.set_current(0)
+    assert deck._quick_panel.row('print_brightness').slider.isEnabled() is True
+
+    row = deck.row('film_stock', section='simulation')
+    index = row.combo.findData('fujifilm_provia_100f')
+    assert index >= 0
+    row.combo.setCurrentIndex(index)
+    row.combo.textActivated.emit(row.combo.currentText())
+    _app.processEvents()
+
+    state = collect_gui_state(widgets=widgets)
+    assert state.simulation.io.scan_film is True
+    assert deck._quick_panel.row('print_brightness').slider.isEnabled() is False
+    assert deck._quick_panel._pad.isEnabled() is False
+
+
 def test_deck_conditions_disable_dependents(deck_bundle) -> None:
     _app, _widgets, _controller, deck = deck_bundle
     grain = deck.row('active', section='grain')

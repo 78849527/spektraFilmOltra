@@ -42,6 +42,13 @@ def tabular_font(base: QtGui.QFont | None = None) -> QtGui.QFont:
     return font
 
 
+class WheelSafeSlider(QtWidgets.QSlider):
+    """滚轮不改变数值；忽略事件，让它冒泡到外层滚动区域。"""
+
+    def wheelEvent(self, event) -> None:  # noqa: N802 - Qt API name
+        event.ignore()
+
+
 class DampedScrollArea(QtWidgets.QScrollArea):
     """滚轮阻尼滚动：目标位置指数跟随收敛，接近边界自然缓停。
 

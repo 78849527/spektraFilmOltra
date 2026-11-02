@@ -12,7 +12,7 @@ from spektrafilm_gui.library_page import ElidedLabel, ThumbnailView
 from spektrafilm_gui.library_store import LibraryItem
 from spektrafilm_gui.library_thumbs import ThumbnailService
 from spektrafilm_gui.preset_rail import PresetRail
-from spektrafilm_gui.theme_oflim import ACCENT, SURFACE_2, TEXT_1, TEXT_2, TEXT_3, rgba
+from spektrafilm_gui.theme_oflim import ACCENT, ACCENT_ON, SURFACE_2, TEXT_1, TEXT_2, TEXT_3, rgba
 from spektrafilm_gui.ui_names import film_display_name, paper_display_name
 from spektrafilm_gui.widget_primitives import tabular_font
 
@@ -115,15 +115,15 @@ class EditorTopBar(QWidget):
         self._export_button.setCursor(Qt.PointingHandCursor)
         self._export_button.setFixedHeight(28)
         self._export_button.setToolTip('按当前导出设置直接导出；点右侧箭头修改设置')
-        self._export_button.setIcon(shell_icons.icon('export', ACCENT, 12))
+        self._export_button.setIcon(shell_icons.icon('export', ACCENT_ON, 12))
         self._export_button.setIconSize(QtCore.QSize(12, 12))
         self._export_button.clicked.connect(self.export_requested.emit)
 
         self._export_menu = QPushButton()
         self._export_menu.setObjectName('exportMenu')
-        self._export_menu.setIcon(shell_icons.icon('chevron_down', ACCENT, 10))
+        self._export_menu.setIcon(shell_icons.icon('chevron_down', TEXT_2, 10))
         self._export_menu.setIconSize(QtCore.QSize(10, 10))
-        self._export_menu.setFixedWidth(24)
+        self._export_menu.setFixedWidth(22)
         self._export_menu.setFixedHeight(28)
         self._export_menu.setCursor(Qt.PointingHandCursor)
         menu = QMenu(self._export_menu)
@@ -133,10 +133,9 @@ class EditorTopBar(QWidget):
 
         export_box = QWidget()
         export_box.setObjectName('exportBox')
-        export_box.setAttribute(Qt.WA_StyledBackground, True)
         export_layout = QHBoxLayout(export_box)
         export_layout.setContentsMargins(0, 0, 0, 0)
-        export_layout.setSpacing(0)
+        export_layout.setSpacing(4)
         export_layout.addWidget(self._export_button)
         export_layout.addWidget(self._export_menu)
 
@@ -251,7 +250,7 @@ class PreviewStage(QWidget):
 
         # 左下角渲染档位：完整 / 1/2 / 1/4
         self._scale_button = QPushButton('1/2')
-        self._scale_button.setObjectName('ghostAction')
+        self._scale_button.setObjectName('scalePill')
         self._scale_button.setFixedHeight(26)
         self._scale_button.setCursor(Qt.PointingHandCursor)
         self._scale_button.setToolTip('预览渲染分辨率：完整、1/2 或 1/4')
@@ -558,6 +557,19 @@ class FilmThumb(QFrame):
         super().mousePressEvent(event)
 
 
+class _StripScroll(QScrollArea):
+    """胶片条横向滚动：滚动条隐藏，滚轮直接横移。"""
+
+    def wheelEvent(self, event) -> None:  # noqa: N802 - Qt API name
+        bar = self.horizontalScrollBar()
+        delta = event.angleDelta().y() or event.angleDelta().x()
+        if bar.maximum() > 0 and delta:
+            bar.setValue(max(bar.minimum(), min(bar.maximum(), bar.value() - round(delta / 120 * 96))))
+            event.accept()
+            return
+        super().wheelEvent(event)
+
+
 class Filmstrip(QWidget):
     item_clicked = Signal(str)
     add_requested = Signal()
@@ -572,11 +584,12 @@ class Filmstrip(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
-        self._scroll = QScrollArea()
+        self._scroll = _StripScroll()
+        self._scroll.setObjectName('filmstripScroll')
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QFrame.NoFrame)
         self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._strip = QWidget()
         self._strip_layout = QHBoxLayout(self._strip)
         self._strip_layout.setContentsMargins(10, 9, 10, 9)
@@ -648,6 +661,7 @@ class EditorPage(QWidget):
     strip_item_selected = Signal(str)
     preview_scale_changed = Signal(float)
     profile_changed = Signal(str, str)
+    quick_changed = Signal()
 
     def __init__(
         self,
@@ -694,7 +708,7 @@ class EditorPage(QWidget):
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
         splitter.setStretchFactor(2, 0)
-        splitter.setSizes([300, 900, 330])
+        splitter.setSizes([300, 900, 300])
         root.addWidget(splitter, 1)
 
         self.top_bar.back_requested.connect(self.back_requested.emit)
@@ -706,6 +720,7 @@ class EditorPage(QWidget):
         self.top_bar.favorite_toggled.connect(self.favorite_toggled.emit)
         self.inspector.reset_requested.connect(self.reset_requested.emit)
         self.inspector.profile_changed.connect(self.profile_changed.emit)
+        self.inspector.quick_changed.connect(self.quick_changed.emit)
         self.preset_rail.film_selected.connect(self.film_selected.emit)
         self.preset_rail.paper_selected.connect(self.paper_selected.emit)
         self.filmstrip.item_clicked.connect(self.strip_item_selected.emit)
@@ -747,6 +762,15 @@ class EditorPage(QWidget):
             pass
         self.preset_rail.set_current(film, paper)
         self._refresh_chip()
+
+    def set_quick_state(self, raw) -> None:
+        self.inspector.set_quick_state(raw)
+
+    def quick_state_dict(self) -> dict:
+        return self.inspector.quick_state_dict()
+
+    def reset_quick_state(self) -> None:
+        self.inspector.reset_quick_state()
 
     def _refresh_chip(self, *_args) -> None:
         try:

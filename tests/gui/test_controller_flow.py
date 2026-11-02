@@ -312,6 +312,38 @@ def test_load_raw_image_requests_auto_preview_once_when_enabled(monkeypatch) -> 
     assert captured['preview_requests'] == 1
 
 
+def test_load_raw_image_delegates_non_raw_path_to_input_loader(monkeypatch) -> None:
+    controller = GuiController(viewer=object(), widgets=object())
+    captured: dict[str, str] = {}
+
+    monkeypatch.setattr(controller, 'load_input_image', lambda path: captured.setdefault('path', path))
+    monkeypatch.setattr(
+        controller_module,
+        'load_and_process_raw_file',
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError('raw loader must not run')),
+    )
+
+    controller.load_raw_image('C:/tmp/sample.png')
+
+    assert captured['path'] == 'C:/tmp/sample.png'
+
+
+def test_load_input_image_delegates_raw_path_to_raw_loader(monkeypatch) -> None:
+    controller = GuiController(viewer=object(), widgets=object())
+    captured: dict[str, str] = {}
+
+    monkeypatch.setattr(controller, 'load_raw_image', lambda path: captured.setdefault('path', path))
+    monkeypatch.setattr(
+        controller_module,
+        'detect_input_color_space',
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError('rgb loader must not run')),
+    )
+
+    controller.load_input_image('C:/tmp/sample.dng')
+
+    assert captured['path'] == 'C:/tmp/sample.dng'
+
+
 def test_load_raw_image_reports_invalid_custom_white_balance_without_mutating_layers(monkeypatch) -> None:
     viewer = FakeViewer([
         FakeLayer(np.zeros((2, 2, 3), dtype=np.float32), name='older'),
@@ -592,7 +624,7 @@ def test_request_auto_preview_schedules_once_and_runs_preview(monkeypatch) -> No
 
     assert len(captured['scheduled']) == 1
     scheduled_delay, scheduled_callback = captured['scheduled'][0]
-    assert scheduled_delay == 0
+    assert scheduled_delay == controller_module.PREVIEW_DEBOUNCE_MS
 
     scheduled_callback()
 
@@ -626,6 +658,46 @@ def test_request_auto_preview_replays_after_active_simulation(monkeypatch) -> No
     replay_callback()
 
     assert captured['preview_runs'] == [True]
+
+
+def test_preview_skips_unchanged_fingerprint(monkeypatch) -> None:
+    simulation_section = SimpleNamespace(auto_preview_value=lambda: True)
+    controller = GuiController(viewer=object(), widgets=SimpleNamespace(simulation=simulation_section))
+    controller._current_preview_image = np.full((2, 2, 3), 0.25, dtype=np.float32)
+    controller._last_preview_fingerprint = ('generation', 'digest')
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(controller, '_preview_fingerprint', lambda: ('generation', 'digest'))
+    monkeypatch.setattr(
+        controller,
+        '_run_preview',
+        lambda *, report_status: captured.setdefault('preview_runs', []).append(report_status),
+    )
+
+    controller._run_scheduled_auto_preview()
+
+    assert 'preview_runs' not in captured
+
+
+def test_preview_input_is_capped_to_max_edge(monkeypatch) -> None:
+    controller = GuiController(viewer=object(), widgets=object())
+    controller._preview_render_scale = 1.0
+
+    class _LargeImage:
+        shape = (3000, 4000, 3)
+
+    controller._current_input_image = _LargeImage()
+    captured: dict[str, int] = {}
+
+    def fake_resize(image, *, max_size):
+        captured['max_size'] = max_size
+        return np.zeros((2, 2, 3), dtype=np.float32)
+
+    monkeypatch.setattr(controller, '_resize_for_preview', staticmethod(fake_resize))
+    scaled = controller._scaled_preview_image()
+
+    assert captured['max_size'] == controller_module.PREVIEW_SIMULATION_MAX_EDGE
+    assert scaled is not None
 
 
 def test_refresh_preview_cache_recomputes_cached_preview_without_hiding_visible_output(monkeypatch) -> None:

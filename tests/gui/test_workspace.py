@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from qtpy import QtGui, QtTest, QtWidgets
 
 from spektrafilm_gui import library_store as store_module
@@ -38,6 +39,8 @@ class _FakeController:
         self.simulating = False
         self.callbacks = []
         self.loaded: list[str] = []
+        self.loaded_input: list[str] = []
+        self.loaded_raw: list[str] = []
         self.export_calls = 0
         self.preview_calls = 0
         self.profile_calls: list[str] = []
@@ -51,10 +54,12 @@ class _FakeController:
 
     def load_input_image(self, path: str) -> None:
         self.loaded.append(path)
+        self.loaded_input.append(path)
         self._current_input_path = path
 
     def load_raw_image(self, path: str) -> None:
         self.loaded.append(path)
+        self.loaded_raw.append(path)
         self._current_input_path = path
 
     def current_input_size(self):
@@ -136,6 +141,22 @@ def test_workspace_starts_on_library_and_opens_editor(tmp_path: Path) -> None:
     window.close()
 
 
+def test_workspace_repairs_stale_raw_flag_for_png(tmp_path: Path) -> None:
+    window, store, controller = _window(tmp_path)
+    item = store.all_items()[0]
+    store.update_item(item.id, is_raw=True)
+
+    window.open_item(item.id)
+    _app().processEvents()
+
+    assert controller.loaded_raw == []
+    assert controller.loaded_input == [item.path]
+    repaired = store.item(item.id)
+    assert repaired is not None and repaired.is_raw is False
+
+    window.close()
+
+
 def test_workspace_remembers_per_photo_adjustments(tmp_path: Path) -> None:
     window, store, controller = _window(tmp_path)
     item = store.all_items()[0]
@@ -155,6 +176,33 @@ def test_workspace_remembers_per_photo_adjustments(tmp_path: Path) -> None:
     window.open_item(item.id)
     _app().processEvents()
     assert abs(float(window._widgets.simulation._editors['print_exposure'].value) - 2.0) < 1e-6
+
+    window.close()
+
+
+def test_workspace_persists_quick_intent(tmp_path: Path) -> None:
+    window, store, _controller = _window(tmp_path)
+    item = store.all_items()[0]
+    window.open_item(item.id)
+    _app().processEvents()
+
+    deck = window.editor_page.inspector
+    deck._mode_tabs.set_current(0)
+    row = deck._quick_panel.row('camera_exposure')
+    row.set_value(1.0)
+    row._commit()
+    window._persist_active_state()
+
+    saved = store.item(item.id)
+    assert saved is not None and saved.state is not None
+    assert saved.state['quick']['intent']['camera_exposure'] == pytest.approx(1.0)
+
+    window.show_library()
+    _app().processEvents()
+    window.open_item(item.id)
+    _app().processEvents()
+    assert deck._quick_panel.row('camera_exposure').value() == pytest.approx(1.0)
+    assert window._widgets.camera.exposure_compensation_ev.value == pytest.approx(1.0)
 
     window.close()
 
