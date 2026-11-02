@@ -67,7 +67,7 @@ enum SkinRadius {
 }
 
 enum SkinMetric {
-    static let chromeHeight: CGFloat = 32
+    static let chromeHeight: CGFloat = 28
     static let pageMargin: CGFloat = 28
     static let topBarHeight: CGFloat = 54
     static let sideRailWidth: CGFloat = 300
