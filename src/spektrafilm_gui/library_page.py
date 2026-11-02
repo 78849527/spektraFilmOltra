@@ -86,6 +86,14 @@ class ElidedLabel(QLabel):
     def full_text(self) -> str:
         return self._full_text
 
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt API name
+        hint = super().minimumSizeHint()
+        return QSize(0, hint.height())
+
+    def sizeHint(self) -> QSize:  # noqa: N802 - Qt API name
+        hint = super().sizeHint()
+        return QSize(min(hint.width(), 520), hint.height())
+
     def resizeEvent(self, event) -> None:  # noqa: N802 - Qt API name
         super().resizeEvent(event)
         self._update_elided()

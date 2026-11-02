@@ -54,6 +54,7 @@ from spektrafilm_gui.theme_oflim import (
     SURFACE_1,
     SURFACE_2,
     SURFACE_3,
+    SURFACE_4,
     TEXT_1,
     TEXT_2,
     TEXT_3,
@@ -61,15 +62,15 @@ from spektrafilm_gui.theme_oflim import (
     rgba,
 )
 from spektrafilm_gui.ui_names import technical_label_for, tip_for
-from spektrafilm_gui.widget_primitives import platform_default_font
+from spektrafilm_gui.widget_primitives import platform_default_font, tabular_font
 
 Qt = QtCore.Qt
 
-ROW_HEIGHT = 38
-TOGGLE_HEIGHT = 38
-ENUM_HEIGHT = 38
-GROUP_HEIGHT = 18
-PANEL_MARGIN = 16
+ROW_HEIGHT = 44
+TOGGLE_HEIGHT = 44
+ENUM_HEIGHT = 44
+GROUP_HEIGHT = 26
+PANEL_MARGIN = 14
 
 
 @dataclass(frozen=True)
@@ -309,50 +310,51 @@ QWidget#paramDeck {{
     border-left: 1px solid {HAIRLINE};
 }}
 QWidget#deckHeader {{ background: transparent; }}
-QLabel#deckEyebrow {{
-    color: {TEXT_2}; font-size: 10px; font-weight: 500;
-    letter-spacing: 1.7px;
+QLabel#deckBadge {{
+    color: {ACCENT};
+    font-size: 11px;
+    font-weight: 500;
+    background: {rgba(ACCENT, 0.10)};
+    border-radius: 7px;
+    padding: 1px 6px;
 }}
 QPushButton#deckReset {{
-    color: {TEXT_1}; background: {SURFACE_2};
-    border: 1px solid {HAIRLINE}; border-radius: 6px;
-    font-size: 10.5px; font-weight: 500;
-    padding: 0px 10px;
+    color: {TEXT_2}; background: transparent;
+    border: 1px solid {HAIRLINE}; border-radius: 8px;
+    font-size: 12px; font-weight: 500;
+    padding: 0px 12px;
 }}
-QPushButton#deckReset:hover {{ background: {SURFACE_3}; border-color: {HAIRLINE_STRONG}; }}
+QPushButton#deckReset:hover {{ background: {SURFACE_2}; border-color: {HAIRLINE_STRONG}; color: {TEXT_1}; }}
 
 QFrame#deckHistogram {{
-    background: {SURFACE_0};
+    background: {SURFACE_2};
     border: 1px solid {HAIRLINE};
-    border-radius: 9px;
+    border-radius: 12px;
 }}
 QLabel#deckHistogramTitle {{
-    color: {TEXT_3}; font-size: 8.5px; font-weight: 500;
-    letter-spacing: 1.3px;
+    color: {TEXT_2}; font-size: 11px; font-weight: 500;
 }}
 QLabel#deckHistogramMeta {{
-    color: {TEXT_3}; font-size: 9px; font-weight: 500;
-    letter-spacing: 0.8px;
+    color: {TEXT_3}; font-size: 11px;
 }}
 
 QFrame#deckCard {{
     background: {SURFACE_2};
     border: 1px solid {HAIRLINE};
-    border-radius: 11px;
+    border-radius: 12px;
 }}
 QLabel#deckGroup {{
-    color: {TEXT_3}; font-size: 9px; font-weight: 500;
-    letter-spacing: 1.1px;
+    color: {TEXT_3}; font-size: 11px; font-weight: 600;
 }}
-QLabel#deckLabel {{ color: {TEXT_2}; font-size: 10.5px; background: transparent; }}
+QLabel#deckLabel {{ color: {TEXT_2}; font-size: 12px; background: transparent; }}
 QLabel#deckValue {{
-    color: {TEXT_3}; font-size: 9.5px; background: transparent;
+    color: {TEXT_3}; font-size: 12px; background: transparent;
 }}
 QLabel#deckValue[dirty="true"] {{ color: {ACCENT}; }}
 
 QDoubleSpinBox#deckNumber, QSpinBox#deckNumber {{
     background: transparent; border: none; color: {TEXT_2};
-    font-size: 10px; padding: 0; min-height: 20px;
+    font-size: 12px; padding: 0; min-height: 22px;
 }}
 QDoubleSpinBox#deckNumber:hover, QSpinBox#deckNumber:hover {{ color: {TEXT_1}; }}
 QDoubleSpinBox#deckNumber:focus, QSpinBox#deckNumber:focus {{ color: {TEXT_1}; }}
@@ -361,25 +363,26 @@ QDoubleSpinBox#deckNumber[dirty="true"], QSpinBox#deckNumber[dirty="true"] {{ co
 
 QPushButton#deckAction {{
     background: {SURFACE_2}; color: {TEXT_2};
-    border: 1px solid {HAIRLINE}; border-radius: 6px;
-    font-size: 10.5px; min-height: 26px;
+    border: 1px solid {HAIRLINE}; border-radius: 8px;
+    font-size: 12px; min-height: 28px;
 }}
 QPushButton#deckAction:hover {{ color: {TEXT_1}; border-color: {HAIRLINE_STRONG}; }}
 
 QSlider#deckSlider {{ background: transparent; }}
 QSlider#deckSlider::groove:horizontal {{
-    height: 2px; background: {SURFACE_3}; border-radius: 1px;
+    height: 3px; background: {SURFACE_4}; border-radius: 1.5px;
 }}
-/* 填充段：white 21% 叠在面板上约等于 #454543，收进中性阶 */
+/* 填充段：white 22% 叠在面板上，收进中性阶 */
 QSlider#deckSlider::sub-page:horizontal {{
-    height: 2px; background: {rgba('#FFFFFF', 0.21)}; border-radius: 1px;
+    height: 3px; background: {rgba('#FFFFFF', 0.22)}; border-radius: 1.5px;
 }}
 QSlider#deckSlider[dirty="true"]::sub-page:horizontal {{
-    height: 2px; background: {ACCENT}; border-radius: 1px;
+    height: 3px; background: {ACCENT}; border-radius: 1.5px;
 }}
 QSlider#deckSlider::handle:horizontal {{
-    width: 9px; height: 9px; margin: -4px 0;
-    border-radius: 4px; background: #E6E6E6;
+    width: 11px; height: 11px; margin: -5px 0;
+    border-radius: 5px; background: #ECE9E2;
+    border: 1px solid rgba(0, 0, 0, 0.35);
 }}
 QSlider#deckSlider::handle:horizontal:hover {{ background: #FFFFFF; }}
 
@@ -387,17 +390,17 @@ QComboBox#deckCombo {{
     color: {TEXT_2}; background: transparent;
     border: none; border-radius: 0px;
     padding: 0px 14px 0px 0px;
-    font-size: 10px;
+    font-size: 12px;
 }}
 QComboBox#deckCombo:hover {{ color: {TEXT_1}; }}
 QComboBox#deckCombo::drop-down {{ border: none; width: 0px; background: transparent; }}
 QComboBox#deckCombo::down-arrow {{ image: none; width: 0px; height: 0px; }}
 QComboBox#deckCombo QAbstractItemView {{
     background: {SURFACE_2}; color: {TEXT_1};
-    border: 1px solid {HAIRLINE}; border-radius: 7px;
+    border: 1px solid {HAIRLINE}; border-radius: 8px;
     selection-background-color: {SURFACE_3};
     outline: none; padding: 4px;
-    font-size: 11px;
+    font-size: 12px;
 }}
 """
 
@@ -454,10 +457,8 @@ class _Row(QtWidgets.QWidget):
         self._value = QtWidgets.QLabel('')
         self._value.setObjectName('deckValue')
         self._value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        value_font = platform_default_font()
-        value_font.setFamilies(['Menlo', 'Monaco'])
-        value_font.setPixelSize(13)
-        self._value.setFont(value_font)
+        self._value.setMinimumWidth(52)
+        self._value.setFont(tabular_font())
         self._top.addWidget(self._label, 1, Qt.AlignVCenter)
         self._top.addWidget(self._value, 0, Qt.AlignVCenter)
         self._layout.addLayout(self._top)
@@ -553,6 +554,8 @@ class SliderRow(_Row):
             if abs(stops) < 0.5 * 10 ** (-decimals):
                 stops = 0.0  # 避免显示 -0.00
             return f'{stops:+.{decimals}f}'
+        if abs(float(value)) < 0.5 * 10 ** (-decimals):
+            value = 0.0  # 避免显示 -0
         text = f'{value:.{decimals}f}'
         if decimals > 0 and '.' in text:
             text = text.rstrip('0').rstrip('.')
@@ -681,10 +684,13 @@ class QuickSliderRow(_Row):
 
     def _format(self, value: float) -> str:
         decimals = max(0, int(self._control.decimals))
-        text = f'{float(value):.{decimals}f}'
+        value = float(value)
+        if abs(value) < 0.5 * 10 ** (-decimals):
+            value = 0.0
+        text = f'{value:.{decimals}f}'
         if decimals > 0 and '.' in text:
             text = text.rstrip('0').rstrip('.')
-        if self._control.lo < 0 and float(value) > 0:
+        if self._control.lo < 0 and value > 0:
             text = f'+{text}'
         return f'{text}{self._control.suffix}'
 
@@ -1058,12 +1064,16 @@ class EnumRow(_Row):
         self.combo.setCursor(Qt.PointingHandCursor)
         self.combo.setToolTip(self.toolTip())
         self.combo.setSizeAdjustPolicy(QtWidgets.QComboBox.AdjustToContents)
-        self.combo.setMaximumWidth(190)
+        self.combo.setMinimumContentsLength(6)
+        self.combo.setMaximumWidth(198)
+        self.combo.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Fixed)
         values = [source.itemText(index) for index in range(source.count())]
         translate = getattr(source, 'display_text_for_value', None)
         for raw in values:
             shown = translate(str(raw)) if callable(translate) else str(raw)
             self.combo.addItem(str(shown), str(raw))
+        self.combo.currentTextChanged.connect(self._update_combo_tooltip)
+        self._update_combo_tooltip(self.combo.currentText())
 
         self._chevron = QtWidgets.QLabel(self.combo)
         self._chevron.setPixmap(shell_icons.icon('chevron_down', TEXT_3, 8).pixmap(8, 8))
@@ -1075,6 +1085,10 @@ class EnumRow(_Row):
         if self._on_activate is not None:
             self.combo.textActivated.connect(self._on_text_activated)
         self.sync_from_source()
+
+    def _update_combo_tooltip(self, text: str) -> None:
+        tip = self.toolTip()
+        self.combo.setToolTip(f'{tip}\n当前：{text}' if tip else text)
 
     def _on_text_activated(self, text: str) -> None:
         if self._on_activate is None:
@@ -1122,13 +1136,13 @@ class GroupLabel(QtWidgets.QLabel):
         super().__init__(text, parent)
         self.setObjectName('deckGroup')
         self.setFixedHeight(GROUP_HEIGHT)
-        self.setAlignment(Qt.AlignLeft | Qt.AlignBottom)
+        self.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
 
 
 class HistogramView(QtWidgets.QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedHeight(74)
+        self.setFixedHeight(50)
         self._histograms: list | None = None
 
     def set_array(self, array) -> None:
@@ -1168,7 +1182,7 @@ class HistogramView(QtWidgets.QWidget):
                 painter.drawText(rect, Qt.AlignCenter, '等待预览')
                 return
             maximum = max(float(hist.max(initial=0.0)) for hist in self._histograms) or 1.0
-            for histogram, color in zip(self._histograms, ('#C7705D', '#7D9B76', '#6B8CAE')):
+            for histogram, color in zip(self._histograms, ('#B46B5C', '#8A9B78', '#7C8DA0')):
                 path = QtGui.QPainterPath()
                 count = len(histogram)
                 path.moveTo(rect.left(), rect.bottom())
@@ -1188,14 +1202,16 @@ class HistogramView(QtWidgets.QWidget):
 
 
 class Tabs(QtWidgets.QWidget):
-    """oflim 的分段控件：1px 轨、3px 内边距、选中块 surface2 + 黄铜描边。"""
+    """两种分段：segmented 用于模式切换，underline 用于页面切换。"""
 
     changed = QtCore.Signal(int)
-    HEIGHT = 33
+    HEIGHT = 32
 
-    def __init__(self, labels: list[str], parent=None):
+    def __init__(self, labels: list[str], *, variant: str = 'segmented', parent=None):
         super().__init__(parent)
-        self.setFixedHeight(self.HEIGHT)
+        self._variant = variant
+        self._height = 30 if variant == 'underline' else 32
+        self.setFixedHeight(self._height)
         self._labels = labels
         self._index = 0
         self._position = 0.0
@@ -1204,8 +1220,8 @@ class Tabs(QtWidgets.QWidget):
         self.setMouseTracking(True)
         self.setCursor(Qt.PointingHandCursor)
         self._font = platform_default_font()
-        self._font.setPixelSize(13)
-        self._font.setLetterSpacing(QtGui.QFont.AbsoluteSpacing, 0.7)
+        self._font.setPixelSize(12)
+        self._font.setLetterSpacing(QtGui.QFont.AbsoluteSpacing, 0.2)
         self._font_selected = QtGui.QFont(self._font)
         self._font_selected.setWeight(QtGui.QFont.Medium)
 
@@ -1234,27 +1250,51 @@ class Tabs(QtWidgets.QWidget):
         painter = QtGui.QPainter(self)
         try:
             painter.setRenderHint(QtGui.QPainter.Antialiasing, True)
-            track = QtCore.QRectF(0.5, 0.5, self.width() - 1, self.height() - 1)
-            painter.setPen(QtGui.QPen(QtGui.QColor(HAIRLINE), 1))
-            painter.setBrush(QtGui.QColor(SURFACE_1))
-            painter.drawRoundedRect(track, 8, 8)
-
-            inner = track.adjusted(3, 3, -3, -3)
-            count = max(1, len(self._labels))
-            seg = inner.width() / count
-            pill = QtCore.QRectF(inner.left() + seg * self._position, inner.top(), seg, inner.height())
-            painter.setPen(QtGui.QPen(QtGui.QColor(200, 169, 126, 61), 1))
-            painter.setBrush(QtGui.QColor(SURFACE_2))
-            painter.drawRoundedRect(pill, 6, 6)
-
-            for index, label in enumerate(self._labels):
-                rect = QtCore.QRectF(inner.left() + seg * index, inner.top(), seg, inner.height())
-                active = abs(self._position - index) < 0.5
-                painter.setFont(self._font_selected if active else self._font)
-                painter.setPen(QtGui.QColor(ACCENT if active else TEXT_3))
-                painter.drawText(rect, Qt.AlignCenter, label)
+            if self._variant == 'underline':
+                self._paint_underline(painter)
+            else:
+                self._paint_segmented(painter)
         finally:
             painter.end()
+
+    def _paint_segmented(self, painter: QtGui.QPainter) -> None:
+        track = QtCore.QRectF(0.5, 0.5, self.width() - 1, self._height - 1)
+        painter.setPen(QtGui.QPen(QtGui.QColor(HAIRLINE), 1))
+        painter.setBrush(QtGui.QColor(SURFACE_0))
+        painter.drawRoundedRect(track, 9, 9)
+
+        inner = track.adjusted(3, 3, -3, -3)
+        count = max(1, len(self._labels))
+        seg = inner.width() / count
+        pill = QtCore.QRectF(inner.left() + seg * self._position, inner.top(), seg, inner.height())
+        painter.setPen(QtGui.QPen(QtGui.QColor(HAIRLINE_STRONG), 1))
+        painter.setBrush(QtGui.QColor(SURFACE_3))
+        painter.drawRoundedRect(pill, 7, 7)
+
+        for index, label in enumerate(self._labels):
+            rect = QtCore.QRectF(inner.left() + seg * index, inner.top(), seg, inner.height())
+            active = index == self._index
+            painter.setFont(self._font_selected if active else self._font)
+            painter.setPen(QtGui.QColor(TEXT_1 if active else TEXT_3))
+            painter.drawText(rect, Qt.AlignCenter, label)
+
+    def _paint_underline(self, painter: QtGui.QPainter) -> None:
+        count = max(1, len(self._labels))
+        seg = self.width() / count
+        for index, label in enumerate(self._labels):
+            rect = QtCore.QRectF(seg * index, 0, seg, self._height - 4)
+            active = index == self._index
+            painter.setFont(self._font_selected if active else self._font)
+            painter.setPen(QtGui.QColor(TEXT_1 if active else TEXT_3))
+            painter.drawText(rect, Qt.AlignCenter, label)
+
+        metrics = QtGui.QFontMetrics(self._font_selected)
+        label = self._labels[self._index]
+        width = min(metrics.horizontalAdvance(label) + 8, seg - 12)
+        center = (self._position + 0.5) * seg
+        painter.setPen(QtGui.QPen(QtGui.QColor(ACCENT), 2))
+        y = self._height - 2.0
+        painter.drawLine(QtCore.QPointF(center - width / 2, y), QtCore.QPointF(center + width / 2, y))
 
 
 class ParameterDeck(QtWidgets.QWidget):
@@ -1287,48 +1327,42 @@ class ParameterDeck(QtWidgets.QWidget):
     def _build_header(self) -> QtWidgets.QWidget:
         header = QtWidgets.QWidget()
         header.setObjectName('deckHeader')
-        header.setFixedHeight(50)
+        header.setFixedHeight(48)
         layout = QtWidgets.QHBoxLayout(header)
-        layout.setContentsMargins(14, 0, 14, 0)
-        layout.setSpacing(6)
+        layout.setContentsMargins(14, 0, 12, 0)
+        layout.setSpacing(8)
 
-        title = QtWidgets.QLabel('显影')
-        title.setObjectName('deckEyebrow')
+        self._mode_tabs = Tabs(['快速', '专业'], variant='segmented')
+        self._mode_tabs.setFixedWidth(176)
 
         self._badge = QtWidgets.QLabel('')
-        self._badge.setStyleSheet(
-            f'color: {ACCENT}; font-size: 9px; background: rgba(200,169,126,0.10);'
-            'border-radius: 7px; padding: 1px 5px;',
-        )
+        self._badge.setObjectName('deckBadge')
         self._badge.setVisible(False)
 
         reset = QtWidgets.QPushButton('重置')
         reset.setObjectName('deckReset')
         reset.setCursor(Qt.PointingHandCursor)
-        reset.setFixedHeight(24)
+        reset.setFixedHeight(26)
         reset.setToolTip('把这张照片的全部参数恢复为出厂值')
         reset.clicked.connect(self.reset_requested.emit)
 
-        layout.addWidget(title, 0, Qt.AlignVCenter)
-        layout.addWidget(self._badge, 0, Qt.AlignVCenter)
+        layout.addWidget(self._mode_tabs, 0, Qt.AlignVCenter)
         layout.addStretch(1)
+        layout.addWidget(self._badge, 0, Qt.AlignVCenter)
         layout.addWidget(reset, 0, Qt.AlignVCenter)
         return header
 
     def _build_body(self) -> QtWidgets.QWidget:
         body = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(body)
-        layout.setContentsMargins(PANEL_MARGIN, 14, PANEL_MARGIN, 10)
+        layout.setContentsMargins(PANEL_MARGIN, 10, PANEL_MARGIN, 10)
         layout.setSpacing(10)
 
-        self._mode_tabs = Tabs(['快速', '专业'])
-        self._mode_tabs.changed.connect(self._show_mode)
-        layout.addWidget(self._mode_tabs)
         layout.addWidget(self._build_histogram())
 
         self._quick_page = self._build_quick_page()
 
-        self._tabs = Tabs([name for name, _ in PAGES] + [PRO_PAGE_LABEL])
+        self._tabs = Tabs([name for name, _ in PAGES] + [PRO_PAGE_LABEL], variant='underline')
         self._tabs.changed.connect(self._show_page)
         self._stack = QtWidgets.QStackedWidget()
         for _name, spec in PAGES:
@@ -1338,7 +1372,7 @@ class ParameterDeck(QtWidgets.QWidget):
         self._pro_page = QtWidgets.QWidget()
         pro_layout = QtWidgets.QVBoxLayout(self._pro_page)
         pro_layout.setContentsMargins(0, 0, 0, 0)
-        pro_layout.setSpacing(10)
+        pro_layout.setSpacing(8)
         pro_layout.addWidget(self._tabs)
         pro_layout.addWidget(self._stack, 1)
 
@@ -1349,6 +1383,7 @@ class ParameterDeck(QtWidgets.QWidget):
 
         self._wire_conditions()
         self._update_raw_availability()
+        self._mode_tabs.changed.connect(self._show_mode)
         self._mode_tabs.set_current(1)
         return body
 
@@ -1373,7 +1408,7 @@ class ParameterDeck(QtWidgets.QWidget):
 
         for group_title, names in QUICK_GROUPS:
             if inner.count() > 0:
-                inner.addSpacing(2)
+                inner.addSpacing(6)
             inner.addWidget(GroupLabel(group_title))
             for name in names:
                 control = CONTROLS[name]
@@ -1385,8 +1420,8 @@ class ParameterDeck(QtWidgets.QWidget):
                 self._quick_rows[name] = row
                 inner.addWidget(row)
 
-        inner.addStretch(1)
         outer.addWidget(card)
+        outer.addStretch(1)
         scroll.setWidget(content)
         return scroll
 
@@ -1436,7 +1471,7 @@ class ParameterDeck(QtWidgets.QWidget):
         for entry in spec:
             if isinstance(entry, Group):
                 if inner.count() > 0:
-                    inner.addSpacing(2)
+                    inner.addSpacing(6)
                 inner.addWidget(GroupLabel(entry.text))
                 continue
             if isinstance(entry, Action):

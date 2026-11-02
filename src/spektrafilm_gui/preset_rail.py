@@ -13,7 +13,8 @@ from qtpy import QtCore, QtGui, QtWidgets
 
 from spektrafilm.model.stocks import FilmStocks, PrintPapers
 from spektrafilm_gui import shell_icons
-from spektrafilm_gui.theme_oflim import ACCENT, TEXT_1, TEXT_2, TEXT_3
+from spektrafilm_gui.library_page import ElidedLabel
+from spektrafilm_gui.theme_oflim import TEXT_3
 from spektrafilm_gui.ui_names import (
     FILM_GROUPS,
     FILM_ISO,
@@ -135,47 +136,34 @@ class PresetCard(QFrame):
         self.setObjectName('presetCard')
         self.entry = entry
         self.setCursor(Qt.PointingHandCursor)
-        self.setFixedHeight(46)
+        self.setFixedHeight(54)
         self._selected = False
 
         swatch = _StockSwatch(entry['raw'], is_paper=is_paper)
-        swatch.setFixedSize(34, 34)
-        name = QLabel(entry['name'])
+        swatch.setFixedSize(38, 38)
+        name = ElidedLabel(entry['name'])
         name.setObjectName('presetName')
-        meta = QLabel(entry['meta'])
+        meta = ElidedLabel(entry['meta'])
         meta.setObjectName('presetMeta')
         name.setToolTip(entry['name'])
         meta.setToolTip(entry['meta'])
 
         text_box = QVBoxLayout()
         text_box.setContentsMargins(0, 0, 0, 0)
-        text_box.setSpacing(1)
+        text_box.setSpacing(2)
         text_box.addWidget(name)
         text_box.addWidget(meta)
 
-        brand = QLabel(entry['brand'].upper())
-        brand.setObjectName('presetBrand')
-
-        # oflim FilmCard 规格：选中时右侧 3.5pt 黄铜圆点
-        self._dot = QLabel()
-        self._dot.setPixmap(shell_icons.dot(ACCENT, 7).pixmap(7, 7))
-        self._dot.setFixedSize(8, 8)
-        self._dot.setAlignment(Qt.AlignCenter)
-        self._dot.setVisible(False)
-
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 6, 10, 6)
+        layout.setContentsMargins(8, 8, 12, 8)
         layout.setSpacing(10)
         layout.addWidget(swatch)
         layout.addLayout(text_box, 1)
-        layout.addWidget(brand, 0, Qt.AlignVCenter)
-        layout.addWidget(self._dot, 0, Qt.AlignVCenter)
 
     def set_selected(self, selected: bool) -> None:
         if self._selected == selected:
             return
         self._selected = selected
-        self._dot.setVisible(selected)
         self.setProperty('selected', 'true' if selected else 'false')
         self.style().unpolish(self)
         self.style().polish(self)
@@ -209,11 +197,11 @@ class PresetRail(QWidget):
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(14, 0, 14, 12)
-        root.setSpacing(9)
+        root.setContentsMargins(14, 0, 14, 14)
+        root.setSpacing(10)
 
         header = QHBoxLayout()
-        header.setContentsMargins(0, 12, 0, 0)
+        header.setContentsMargins(0, 14, 0, 0)
         header.setSpacing(6)
         self._tab_group = QtWidgets.QButtonGroup(self)
         self._tab_group.setExclusive(True)
@@ -223,7 +211,7 @@ class PresetRail(QWidget):
             button.setObjectName('modeTab')
             button.setCheckable(True)
             button.setCursor(Qt.PointingHandCursor)
-            button.setFixedHeight(24)
+            button.setFixedHeight(26)
             button.clicked.connect(lambda _checked=False, target=index: self._set_tab('film' if target == 0 else 'paper'))
             self._tab_group.addButton(button)
             header.addWidget(button)
@@ -237,7 +225,7 @@ class PresetRail(QWidget):
         self._search_box.setObjectName('presetSearch')
         self._search_box.setPlaceholderText('搜索胶片或相纸')
         self._search_box.setClearButtonEnabled(True)
-        self._search_box.setFixedHeight(30)
+        self._search_box.setFixedHeight(32)
         self._search_box.addAction(shell_icons.icon('search', TEXT_3, 12), QLineEdit.LeadingPosition)
         self._search_box.textChanged.connect(self._on_search)
         root.addWidget(self._search_box)
@@ -252,6 +240,7 @@ class PresetRail(QWidget):
             button = QPushButton(brand)
             button.setObjectName('brandChip')
             button.setCheckable(True)
+            button.setFixedHeight(26)
             button.setCursor(Qt.PointingHandCursor)
             button.clicked.connect(lambda _checked=False, value=brand: self._set_brand(value))
             self._brand_group.addButton(button)
@@ -269,7 +258,7 @@ class PresetRail(QWidget):
         self._list = QWidget()
         self._list_layout = QVBoxLayout(self._list)
         self._list_layout.setContentsMargins(0, 2, 0, 2)
-        self._list_layout.setSpacing(3)
+        self._list_layout.setSpacing(4)
         self._list_layout.setAlignment(Qt.AlignTop)
         self._scroll.setWidget(self._list)
         root.addWidget(self._scroll, 1)

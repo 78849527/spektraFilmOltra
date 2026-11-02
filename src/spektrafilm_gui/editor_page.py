@@ -54,32 +54,41 @@ class EditorTopBar(QWidget):
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self.setObjectName('editorTopBar')
-        self.setFixedHeight(46)
+        self.setFixedHeight(54)
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(14, 0, 16, 0)
-        layout.setSpacing(9)
+        layout.setContentsMargins(16, 0, 16, 0)
+        layout.setSpacing(10)
 
         back = QPushButton('照片库')
         back.setObjectName('compactBack')
-        back.setIcon(shell_icons.icon('back', TEXT_2, 10))
-        back.setIconSize(QtCore.QSize(10, 10))
-        back.setFixedHeight(26)
+        back.setIcon(shell_icons.icon('back', TEXT_2, 11))
+        back.setIconSize(QtCore.QSize(11, 11))
+        back.setFixedHeight(28)
         back.setCursor(Qt.PointingHandCursor)
         back.setToolTip('返回照片库')
         back.clicked.connect(self.back_requested.emit)
 
         self._name = ElidedLabel('')
         self._name.setObjectName('editorTitle')
-        self._name.setMinimumWidth(140)
+        self._name.setMinimumWidth(0)
         self._meta = ElidedLabel('')
         self._meta.setObjectName('editorMeta')
         self._meta.setFont(tabular_font(self._meta.font()))
-        self._meta.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self._meta.setMinimumWidth(0)
 
-        self._busy = QLabel('')
+        title_box = QWidget()
+        title_box.setObjectName('editorTitleBox')
+        title_layout = QVBoxLayout(title_box)
+        title_layout.setContentsMargins(0, 0, 0, 0)
+        title_layout.setSpacing(1)
+        title_layout.addWidget(self._name)
+        title_layout.addWidget(self._meta)
+
+        self._busy = ElidedLabel('')
         self._busy.setObjectName('editorBusy')
-        self._busy.setStyleSheet(f'color: {ACCENT}; font-size: 10px; background: transparent;')
-        self._busy.hide()
+        self._busy.setFixedWidth(168)
+        self._busy.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self._busy.setFont(tabular_font(self._busy.font()))
 
         self._progress = QtWidgets.QProgressBar(self)
         self._progress.setObjectName('topProgress')
@@ -94,9 +103,9 @@ class EditorTopBar(QWidget):
         self._progress.hide()
 
         self._favorite = QPushButton()
-        self._favorite.setObjectName('iconButton')
+        self._favorite.setObjectName('favoriteButton')
         self._favorite.setCheckable(True)
-        self._favorite.setFixedSize(26, 26)
+        self._favorite.setFixedSize(28, 30)
         self._favorite.setCursor(Qt.PointingHandCursor)
         self._favorite.setToolTip('收藏这张照片')
         self._favorite.toggled.connect(self._on_favorite_toggled)
@@ -104,7 +113,7 @@ class EditorTopBar(QWidget):
         self._export_button = QPushButton('导出')
         self._export_button.setObjectName('exportButton')
         self._export_button.setCursor(Qt.PointingHandCursor)
-        self._export_button.setFixedHeight(26)
+        self._export_button.setFixedHeight(28)
         self._export_button.setToolTip('按当前导出设置直接导出；点右侧箭头修改设置')
         self._export_button.setIcon(shell_icons.icon('export', ACCENT, 12))
         self._export_button.setIconSize(QtCore.QSize(12, 12))
@@ -114,8 +123,8 @@ class EditorTopBar(QWidget):
         self._export_menu.setObjectName('exportMenu')
         self._export_menu.setIcon(shell_icons.icon('chevron_down', ACCENT, 10))
         self._export_menu.setIconSize(QtCore.QSize(10, 10))
-        self._export_menu.setFixedWidth(22)
-        self._export_menu.setFixedHeight(26)
+        self._export_menu.setFixedWidth(24)
+        self._export_menu.setFixedHeight(28)
         self._export_menu.setCursor(Qt.PointingHandCursor)
         menu = QMenu(self._export_menu)
         menu.addAction('导出设置…', self.export_settings_requested.emit)
@@ -132,12 +141,10 @@ class EditorTopBar(QWidget):
         export_layout.addWidget(self._export_menu)
 
         layout.addWidget(back, 0, Qt.AlignVCenter)
-        layout.addWidget(self._name, 1, Qt.AlignVCenter)
+        layout.addWidget(title_box, 1)
         layout.addWidget(self._busy, 0, Qt.AlignVCenter)
-        layout.addWidget(self._meta, 0, Qt.AlignVCenter)
-        layout.addSpacing(6)
+        layout.addSpacing(2)
         layout.addWidget(self._favorite, 0, Qt.AlignVCenter)
-        layout.addSpacing(4)
         layout.addWidget(export_box, 0, Qt.AlignVCenter)
 
     def set_photo(self, item: LibraryItem) -> None:
@@ -184,9 +191,8 @@ class EditorTopBar(QWidget):
             self._progress.show()
             self._progress.raise_()
             self._busy.setText(f'正在显影 · {RENDER_SCALE_LABELS.get(float(scale), "完整")}')
-            self._busy.show()
             return
-        self._busy.hide()
+        self._busy.setText('')
         self._progress.hide()
         self._progress.setValue(0)
 
@@ -196,8 +202,7 @@ class EditorTopBar(QWidget):
         self._progress.setRange(0, total)
         self._progress.setValue(completed)
         stage = SIMULATION_STAGE_LABELS.get(label, label)
-        self._busy.setText(f'正在显影 · {stage}  {completed}/{total}')
-        self._busy.show()
+        self._busy.setText(f'{stage} {completed}/{total}')
         self._progress.show()
         self._progress.raise_()
 
@@ -247,7 +252,7 @@ class PreviewStage(QWidget):
         # 左下角渲染档位：完整 / 1/2 / 1/4
         self._scale_button = QPushButton('1/2')
         self._scale_button.setObjectName('ghostAction')
-        self._scale_button.setFixedHeight(24)
+        self._scale_button.setFixedHeight(26)
         self._scale_button.setCursor(Qt.PointingHandCursor)
         self._scale_button.setToolTip('预览渲染分辨率：完整、1/2 或 1/4')
         self._scale_button.setIcon(shell_icons.icon('chevron_down', TEXT_3, 8))
@@ -266,11 +271,11 @@ class PreviewStage(QWidget):
         self._scale_button.setMenu(scale_menu)
         self._scale_actions[0.5].setChecked(True)
 
-        # 悬浮工具条：对比 / 旋转 / 适应 / 缩放
+        # 悬浮工具条：对比 / 渲染 / 旋转 / 适应 / 缩放
         self._toolbar = QWidget(self._canvas)
         self._toolbar.setObjectName('floatToolbar')
         tools = QHBoxLayout(self._toolbar)
-        tools.setContentsMargins(9, 0, 9, 0)
+        tools.setContentsMargins(8, 1, 8, 1)
         tools.setSpacing(2)
 
         self._compare_button = QPushButton('对比')
@@ -279,30 +284,45 @@ class PreviewStage(QWidget):
         self._compare_button.setCursor(Qt.PointingHandCursor)
         self._compare_button.setIcon(shell_icons.icon('compare', TEXT_2, 13))
         self._compare_button.setIconSize(QtCore.QSize(13, 13))
-        self._compare_button.setFixedHeight(24)
+        self._compare_button.setFixedHeight(26)
         self._compare_button.setToolTip('拖动分隔线对比原片与显影结果')
         self._compare_button.toggled.connect(self._on_compare_toggled)
         tools.addWidget(self._compare_button)
 
         render_button = QPushButton('渲染')
         render_button.setObjectName('ghostAction')
-        render_button.setFixedHeight(24)
+        render_button.setFixedHeight(26)
         render_button.setCursor(Qt.PointingHandCursor)
         render_button.setToolTip('按当前渲染档位重新计算预览')
         render_button.clicked.connect(self.render_requested.emit)
         tools.addWidget(render_button)
 
+        divider = QFrame()
+        divider.setObjectName('floatDivider')
+        divider.setFixedSize(1, 14)
+        tools.addSpacing(2)
+        tools.addWidget(divider, 0, Qt.AlignVCenter)
+        tools.addSpacing(2)
+
         tools.addWidget(self._tool_button('rotate_ccw', '逆时针旋转', lambda: self._rotate(-1)))
         tools.addWidget(self._tool_button('rotate_cw', '顺时针旋转', lambda: self._rotate(1)))
         tools.addWidget(self._tool_button('fit', '适应窗口', self._fit))
+
+        self._zoom_button = QPushButton('100%')
+        self._zoom_button.setObjectName('ghostAction')
+        self._zoom_button.setFixedHeight(26)
+        self._zoom_button.setCursor(Qt.PointingHandCursor)
+        self._zoom_button.setToolTip('缩放比例：屏幕像素与图像像素的对应关系')
+        self._zoom_button.setIcon(shell_icons.icon('chevron_down', TEXT_3, 8))
+        self._zoom_button.setIconSize(QtCore.QSize(8, 8))
+        zoom_menu = QMenu(self._zoom_button)
         for percent in (100, 200, 400):
-            button = QPushButton(f'{percent}%')
-            button.setObjectName('ghostAction')
-            button.setFixedHeight(24)
-            button.setCursor(Qt.PointingHandCursor)
-            button.setToolTip('屏幕像素与图像像素 1:1 对应' if percent == 100 else f'{percent}% 放大查看')
-            button.clicked.connect(lambda _checked=False, value=percent: self._zoom(value))
-            tools.addWidget(button)
+            action = zoom_menu.addAction(f'{percent}%')
+            action.triggered.connect(
+                lambda _checked=False, value=percent: self._zoom_selected(value)
+            )
+        self._zoom_button.setMenu(zoom_menu)
+        tools.addWidget(self._zoom_button)
 
         # 阻尼缩放 + 原片对比（仅真实 napari viewer 可用）
         self._zoom_controller = None
@@ -346,17 +366,20 @@ class PreviewStage(QWidget):
 
         self._info.adjustSize()
         self._scale_button.adjustSize()
-        button_height = max(self._scale_button.height(), 24)
+        button_height = max(self._scale_button.height(), 26)
         self._scale_button.move(14, height - 14 - button_height)
 
         self._toolbar.adjustSize()
+        toolbar_layout = self._toolbar.layout()
+        if toolbar_layout is not None:
+            toolbar_layout.activate()
         toolbar_x = width - 14 - self._toolbar.width()
         self._toolbar.move(toolbar_x, height - 14 - self._toolbar.height())
 
         info_x = 14 + self._scale_button.width() + 10
         info_width = max(0, toolbar_x - info_x - 12)
         self._info.setFixedWidth(info_width)
-        self._info.move(info_x, height - 12 - self._info.height())
+        self._info.move(info_x, height - 14 - self._info.height())
         self._chip.raise_()
         self._before_chip.raise_()
         self._after_chip.raise_()
@@ -418,7 +441,7 @@ class PreviewStage(QWidget):
         button = QPushButton()
         button.setObjectName('iconButton')
         button.setIcon(shell_icons.icon(icon_name, TEXT_2, 15))
-        button.setFixedSize(26, 24)
+        button.setFixedSize(28, 26)
         button.setToolTip(tooltip)
         button.setCursor(Qt.PointingHandCursor)
         button.clicked.connect(callback)
@@ -430,6 +453,8 @@ class PreviewStage(QWidget):
             parts.append(f'{item.width}×{item.height}')
         if item.film_stock:
             parts.append(film_display_name(item.film_stock))
+        if item.print_paper:
+            parts.append(paper_display_name(item.print_paper))
         self._info.setText(' · '.join(parts))
         self._info.adjustSize()
         self._layout_overlays()
@@ -475,6 +500,10 @@ class PreviewStage(QWidget):
             set_viewer_zoom_percent(self._viewer, float(percent))
         except (AttributeError, RuntimeError, TypeError, ValueError):
             return
+
+    def _zoom_selected(self, percent: int) -> None:
+        self._zoom_button.setText(f'{percent}%')
+        self._zoom(percent)
 
     def _fit(self) -> None:
         try:
@@ -536,7 +565,7 @@ class Filmstrip(QWidget):
     def __init__(self, thumbnails: ThumbnailService, parent: QWidget | None = None):
         super().__init__(parent)
         self.setObjectName('filmstrip')
-        self.setFixedHeight(88)
+        self.setFixedHeight(84)
         self._thumbnails = thumbnails
         self._thumbs: dict[str, FilmThumb] = {}
 

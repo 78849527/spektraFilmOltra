@@ -12,21 +12,21 @@
 from __future__ import annotations
 
 # ── 表面层级 ────────────────────────────────────────────────────
-SURFACE_0 = '#0B0B0B'
-SURFACE_1 = '#151515'
-SURFACE_2 = '#1A1A19'
-SURFACE_3 = '#20201F'
-SURFACE_4 = '#262624'
+SURFACE_0 = '#121315'
+SURFACE_1 = '#18191B'
+SURFACE_2 = '#202124'
+SURFACE_3 = '#282A2D'
+SURFACE_4 = '#34363A'
 
-# ── 文本层级（对应 white 的 100/62/42/26% 不透明度）──────────────
-TEXT_1 = '#FFFFFF'
-TEXT_2 = '#9E9E9E'
-TEXT_3 = '#6B6B6B'
-TEXT_4 = '#424242'
+# ── 文本层级（对应 white 的 100/70/54/36% 不透明度）──────────────
+TEXT_1 = '#F4F4F2'
+TEXT_2 = '#B4B4B0'
+TEXT_3 = '#8A8A86'
+TEXT_4 = '#5E5E5A'
 
-# ── 发丝线（white 4.5% / 9%）────────────────────────────────────
-HAIRLINE = '#0BFFFFFF'
-HAIRLINE_STRONG = '#17FFFFFF'
+# ── 发丝线（white 7% / 13%）──────────────────────────────────────
+HAIRLINE = '#12FFFFFF'
+HAIRLINE_STRONG = '#22FFFFFF'
 
 # ── 唯一强调色：黄铜，取自胶片齿孔与安全灯 ──────────────────────
 ACCENT = '#C8A97E'
@@ -42,10 +42,10 @@ R_LARGE = 15
 R_CONTROL = 6
 
 # ── 布局节奏 ────────────────────────────────────────────────────
-SIDEBAR_WIDTH = 384
-TOP_BAR_HEIGHT = 46
-SECTION_HEADER_HEIGHT = 34
-ROW_HEIGHT = 38
+SIDEBAR_WIDTH = 360
+TOP_BAR_HEIGHT = 48
+SECTION_HEADER_HEIGHT = 36
+ROW_HEIGHT = 44
 
 
 def rgba(hex_color: str, alpha: float) -> str:

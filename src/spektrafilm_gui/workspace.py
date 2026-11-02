@@ -62,7 +62,7 @@ class WorkspaceWindow(QMainWindow):
         self._active_item_id = ''
         self._drop_overlay: QtWidgets.QWidget | None = None
 
-        self.setWindowTitle('Spektrafilm 胶片模拟')
+        self.setWindowTitle('Spektrafilm')
         self.resize(1460, 940)
         self.setMinimumSize(1180, 760)
         self.setFont(platform_default_font())
@@ -162,7 +162,7 @@ class WorkspaceWindow(QMainWindow):
         self.library_page.refresh()
         self.library_page.set_current_item('')
         motion.fade_in(self.library_page, duration=200, start=0.6)
-        self.setWindowTitle('Spektrafilm 胶片库')
+        self.setWindowTitle('Spektrafilm')
         self.statusBar().showMessage('照片库', 2500)
 
     def open_item(self, item_id: str) -> None:
@@ -194,7 +194,7 @@ class WorkspaceWindow(QMainWindow):
         self._stack.setCurrentIndex(1)
         motion.fade_in(self.editor_page.inspector, duration=180, start=0.5)
         motion.fade_in(self.editor_page.preset_rail, duration=180, start=0.5)
-        self.setWindowTitle(f'Spektrafilm — {item.name}')
+        self.setWindowTitle('Spektrafilm')
         display_item = self._display_item(item, state)
         self.editor_page.set_photo(display_item, self._strip_items_for(display_item))
         self.editor_page.set_histogram(None)
@@ -223,7 +223,7 @@ class WorkspaceWindow(QMainWindow):
             self._stack.setCurrentIndex(0)
             self.library_page.set_current_item('')
             self.library_page.refresh()
-            self.setWindowTitle('Spektrafilm 胶片库')
+            self.setWindowTitle('Spektrafilm')
             self._show_status(f'打开 {item.name} 失败')
             return
 

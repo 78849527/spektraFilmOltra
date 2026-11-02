@@ -83,7 +83,7 @@ QLabel#folderName {{
 
 QLabel#photoName {{
     color: {TEXT_1};
-    font-size: 11.5px;
+    font-size: 12px;
 }}
 
 QPushButton#primaryAction {{
@@ -91,7 +91,9 @@ QPushButton#primaryAction {{
     color: {ACCENT};
     border: 1px solid {rgba(ACCENT, 0.55)};
     border-radius: {R_SMALL}px;
-    padding: 7px 18px;
+    padding: 0px 16px;
+    min-height: 30px;
+    max-height: 30px;
     font-size: 12px;
     font-weight: 500;
 }}
@@ -105,7 +107,9 @@ QPushButton#secondaryAction {{
     color: {TEXT_2};
     border: 1px solid {HAIRLINE_STRONG};
     border-radius: {R_SMALL}px;
-    padding: 7px 16px;
+    padding: 0px 16px;
+    min-height: 30px;
+    max-height: 30px;
     font-size: 12px;
     font-weight: 500;
 }}
@@ -122,12 +126,15 @@ QPushButton#ghostAction {{
     color: {TEXT_2};
     border: none;
     border-radius: {R_SMALL}px;
-    padding: 6px 9px;
-    font-size: 11.5px;
+    padding: 0px 8px;
+    min-height: 26px;
+    max-height: 26px;
+    font-size: 12px;
 }}
 QPushButton#ghostAction:hover {{ color: {TEXT_1}; background: {rgba('#FFFFFF', 0.06)}; }}
 QPushButton#ghostAction:pressed {{ color: {TEXT_1}; background: {rgba('#FFFFFF', 0.04)}; }}
 QPushButton#ghostAction:checked {{ color: {ACCENT}; background: {rgba(ACCENT, 0.12)}; }}
+QPushButton#ghostAction::menu-indicator {{ image: none; width: 0px; }}
 
 QPushButton#backAction {{
     background: transparent;
@@ -139,12 +146,24 @@ QPushButton#backAction:hover {{ background: {rgba('#FFFFFF', 0.07)}; border-radi
 QPushButton#iconButton {{
     background: transparent;
     border: none;
-    border-radius: 6px;
-    padding: 3px;
+    border-radius: 7px;
+    padding: 0px;
+    min-height: 28px;
+    max-height: 28px;
 }}
 QPushButton#iconButton:hover {{ background: {rgba('#FFFFFF', 0.08)}; }}
 QPushButton#iconButton:pressed {{ background: {rgba('#FFFFFF', 0.05)}; }}
 QPushButton#iconButton:checked {{ background: {rgba(ACCENT, 0.16)}; }}
+QPushButton#favoriteButton {{
+    background: transparent;
+    border: none;
+    border-radius: 7px;
+    padding: 0px;
+    min-height: 30px;
+    max-height: 30px;
+}}
+QPushButton#favoriteButton:hover {{ background: {rgba('#FFFFFF', 0.08)}; }}
+QPushButton#favoriteButton:checked {{ background: {rgba(ACCENT, 0.16)}; }}
 
 QLineEdit#librarySearch,
 QLineEdit#presetSearch {{
@@ -152,7 +171,9 @@ QLineEdit#presetSearch {{
     color: {TEXT_1};
     border: 1px solid {HAIRLINE};
     border-radius: {R_SMALL}px;
-    padding: 6px 10px;
+    padding: 0px 10px;
+    min-height: 30px;
+    max-height: 30px;
     font-size: 12px;
     selection-background-color: {ACCENT};
     selection-color: {ACCENT_ON};
@@ -165,8 +186,10 @@ QComboBox#librarySort {{
     color: {TEXT_2};
     border: 1px solid {HAIRLINE};
     border-radius: {R_SMALL}px;
-    padding: 5px 10px;
-    font-size: 11.5px;
+    padding: 0px 10px;
+    min-height: 30px;
+    max-height: 30px;
+    font-size: 12px;
 }}
 QComboBox#librarySort:hover {{ color: {TEXT_1}; border-color: {HAIRLINE_STRONG}; }}
 QComboBox#librarySort::drop-down {{ border: none; width: 18px; }}
@@ -183,8 +206,10 @@ QPushButton#filterChip {{
     color: {TEXT_3};
     border: 1px solid transparent;
     border-radius: 13px;
-    padding: 5px 13px;
-    font-size: 11.5px;
+    padding: 0px 13px;
+    min-height: 26px;
+    max-height: 26px;
+    font-size: 12px;
 }}
 QPushButton#filterChip:hover {{ color: {TEXT_1}; background: {rgba('#FFFFFF', 0.05)}; }}
 QPushButton#filterChip:checked {{
@@ -228,17 +253,25 @@ QFrame#photoCard[selected="true"] QLabel#photoThumb {{
 }}
 
 QPushButton#starButton {{
-    background: {rgba('#0B0B0B', 0.55)};
+    background: {rgba(SURFACE_1, 0.92)};
     border: none;
     border-radius: 11px;
-    padding: 3px;
+    padding: 0px;
+    min-width: 22px;
+    max-width: 22px;
+    min-height: 22px;
+    max-height: 22px;
 }}
-QPushButton#starButton:hover {{ background: {rgba('#0B0B0B', 0.8)}; }}
+QPushButton#starButton:hover {{ background: {SURFACE_3}; }}
 QPushButton#colorButton {{
-    background: {rgba('#0B0B0B', 0.55)};
+    background: {rgba(SURFACE_1, 0.92)};
     border: none;
     border-radius: 11px;
-    padding: 3px;
+    padding: 0px;
+    min-width: 22px;
+    max-width: 22px;
+    min-height: 22px;
+    max-height: 22px;
 }}
 
 QWidget#emptyState {{
@@ -256,26 +289,29 @@ QLabel#emptyTitle {{ color: {TEXT_1}; font-size: 17px; font-weight: 500; }}
 QLabel#emptyHint {{ color: {TEXT_3}; font-size: 12px; }}
 QLabel#emptyFormats {{
     color: {TEXT_3};
-    font-size: 10.5px;
-    letter-spacing: 0.4px;
+    font-size: 11px;
+    letter-spacing: 0.2px;
 }}
 
 QWidget#editorTopBar {{
-    background: {SURFACE_0};
+    background: {SURFACE_1};
     border-bottom: 1px solid {HAIRLINE};
 }}
-QLabel#editorTitle {{ color: {TEXT_1}; font-size: 12px; font-weight: 500; }}
-QLabel#editorMeta {{ color: {TEXT_3}; font-size: 10.5px; }}
+QLabel#editorTitle {{ color: {TEXT_1}; font-size: 14px; font-weight: 500; }}
+QLabel#editorMeta {{ color: {TEXT_3}; font-size: 11px; }}
+QLabel#editorBusy {{ color: {ACCENT}; font-size: 11px; }}
 QPushButton#compactBack {{
-    color: {TEXT_1};
-    background: {SURFACE_1};
+    color: {TEXT_2};
+    background: transparent;
     border: 1px solid {HAIRLINE};
-    border-radius: 7px;
-    padding: 0px 11px;
-    font-size: 11px;
+    border-radius: 8px;
+    padding: 0px 12px;
+    min-height: 28px;
+    max-height: 28px;
+    font-size: 12px;
     font-weight: 500;
 }}
-QPushButton#compactBack:hover {{ background: {SURFACE_2}; border-color: {HAIRLINE_STRONG}; }}
+QPushButton#compactBack:hover {{ background: {SURFACE_2}; border-color: {HAIRLINE_STRONG}; color: {TEXT_1}; }}
 QPushButton#compactBack:pressed {{ background: {SURFACE_1}; }}
 
 QWidget#previewStage {{
@@ -283,32 +319,37 @@ QWidget#previewStage {{
 }}
 /* 画布浮动层：信息与工具不做通栏条，悬浮在画面上 */
 QLabel#previewChip {{
-    background: {rgba('#0B0B0B', 0.72)};
+    background: {rgba(SURFACE_1, 0.92)};
     color: {TEXT_2};
     border: 1px solid {HAIRLINE_STRONG};
-    border-radius: 11px;
+    border-radius: 12px;
     padding: 4px 10px;
-    font-size: 10.5px;
+    font-size: 11px;
 }}
 QLabel#floatInfo {{
-    background: {rgba('#0B0B0B', 0.66)};
+    background: {rgba(SURFACE_1, 0.92)};
     color: {TEXT_2};
     border: 1px solid {HAIRLINE_STRONG};
-    border-radius: 10px;
-    padding: 4px 11px;
-    font-size: 10.5px;
+    border-radius: 12px;
+    padding: 5px 12px;
+    font-size: 12px;
 }}
 QWidget#floatToolbar {{
-    background: {rgba('#0B0B0B', 0.66)};
+    background: {rgba(SURFACE_1, 0.92)};
     border: 1px solid {HAIRLINE_STRONG};
-    border-radius: 16px;
+    border-radius: 15px;
 }}
 QWidget#floatToolbar QPushButton#iconButton {{
-    padding: 4px;
+    padding: 0px;
+    min-height: 26px;
+    max-height: 26px;
 }}
 QWidget#floatToolbar QPushButton#ghostAction {{
-    padding: 5px 8px;
-    font-size: 10.5px;
+    padding: 0px 8px;
+}}
+QFrame#floatDivider {{
+    background: {HAIRLINE_STRONG};
+    border: none;
 }}
 
 QWidget#presetRail {{
@@ -318,40 +359,47 @@ QWidget#presetRail {{
 QPushButton#modeTab {{
     color: {TEXT_3};
     background: transparent;
-    border: 1px solid {HAIRLINE};
-    border-radius: 6px;
-    padding: 0px 9px;
-    font-size: 10.5px;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    padding: 0px 12px;
+    min-height: 26px;
+    max-height: 26px;
+    font-size: 12px;
 }}
-QPushButton#modeTab:hover {{ color: {TEXT_2}; background: {rgba(SURFACE_2, 0.7)}; }}
+QPushButton#modeTab:hover {{ color: {TEXT_1}; background: {SURFACE_2}; }}
 QPushButton#modeTab:checked {{
-    color: {ACCENT};
-    background: {SURFACE_2};
-    border-color: {rgba(ACCENT, 0.3)};
+    color: {TEXT_1};
+    background: {SURFACE_3};
+    border-color: {HAIRLINE_STRONG};
     font-weight: 500;
 }}
 QPushButton#brandChip {{
     background: transparent;
     color: {TEXT_3};
     border: 1px solid transparent;
-    border-radius: 6px;
-    padding: 0px 8px;
-    font-size: 10.5px;
+    border-radius: 8px;
+    padding: 0px 10px;
+    min-height: 26px;
+    max-height: 26px;
+    font-size: 12px;
 }}
-QPushButton#brandChip:hover {{ color: {TEXT_1}; background: {rgba('#FFFFFF', 0.04)}; }}
+QPushButton#brandChip:hover {{ color: {TEXT_1}; background: {SURFACE_2}; }}
 QPushButton#brandChip:checked {{
     color: {ACCENT};
-    border-color: {rgba(ACCENT, 0.3)};
-    background: {rgba(ACCENT, 0.08)};
+    border-color: {rgba(ACCENT, 0.28)};
+    background: {rgba(ACCENT, 0.09)};
+    font-weight: 500;
 }}
 
 QLineEdit#presetSearch {{
-    background: {SURFACE_0};
+    background: {SURFACE_2};
     color: {TEXT_1};
     border: 1px solid {HAIRLINE};
-    border-radius: 7px;
-    padding: 0px 9px;
-    font-size: 11px;
+    border-radius: 8px;
+    padding: 0px 10px;
+    min-height: 32px;
+    max-height: 32px;
+    font-size: 12px;
     selection-background-color: {ACCENT};
     selection-color: {ACCENT_ON};
 }}
@@ -359,19 +407,19 @@ QLineEdit#presetSearch {{
 QFrame#presetCard {{
     background: transparent;
     border: 1px solid transparent;
-    border-radius: 7px;
+    border-radius: 9px;
 }}
-QFrame#presetCard:hover {{ background: {SURFACE_2}; }}
+QFrame#presetCard:hover {{ background: {SURFACE_2}; border-color: {HAIRLINE}; }}
 QFrame#presetCard[selected="true"] {{
     background: {SURFACE_3};
-    border-color: {rgba(ACCENT, 0.72)};
+    border-color: {rgba(ACCENT, 0.55)};
 }}
-QLabel#presetName {{ color: {TEXT_2}; font-size: 12.5px; }}
-QFrame#presetCard[selected="true"] QLabel#presetName {{ color: {ACCENT_STRONG}; font-weight: 500; }}
-QLabel#presetMeta {{ color: {TEXT_3}; font-size: 10.5px; }}
+QLabel#presetName {{ color: {TEXT_1}; font-size: 13px; font-weight: 500; }}
+QFrame#presetCard[selected="true"] QLabel#presetName {{ color: {ACCENT_STRONG}; }}
+QLabel#presetMeta {{ color: {TEXT_3}; font-size: 11px; }}
 QLabel#presetBrand {{
-    color: {TEXT_3}; font-size: 9px; font-weight: 500;
-    letter-spacing: 0.9px;
+    color: {TEXT_4}; font-size: 11px; font-weight: 500;
+    letter-spacing: 0.4px;
 }}
 
 QWidget#inspectorPanel {{
@@ -386,11 +434,11 @@ QWidget#histogramCard {{
 
 QLabel#paramLabel {{
     color: {TEXT_2};
-    font-size: 11.5px;
+    font-size: 12px;
 }}
 QLabel#inspectorSectionLabel {{
     color: {TEXT_3};
-    font-size: 10.5px;
+    font-size: 11px;
     font-weight: 600;
 }}
 QDoubleSpinBox#paramValue {{
@@ -398,7 +446,7 @@ QDoubleSpinBox#paramValue {{
     border: none;
     color: {TEXT_2};
     padding: 0px;
-    font-size: 11px;
+    font-size: 11.5px;
 }}
 QDoubleSpinBox#paramValue:hover,
 QDoubleSpinBox#paramValue:focus {{
@@ -433,6 +481,10 @@ QPushButton#filmAddThumb {{
     background: {SURFACE_2};
     border: 1px dashed {HAIRLINE_STRONG};
     border-radius: {R_SMALL}px;
+    min-height: 66px;
+    max-height: 66px;
+    min-width: 66px;
+    max-width: 66px;
 }}
 QPushButton#filmAddThumb:hover {{
     background: {SURFACE_3};
@@ -443,16 +495,20 @@ QPushButton#filmAddThumb:hover {{
 QWidget#exportBox {{
     background: transparent;
     border: 1px solid {rgba(ACCENT, 0.55)};
-    border-radius: 7px;
+    border-radius: 8px;
+    min-height: 28px;
+    max-height: 28px;
 }}
 QPushButton#exportButton {{
     background: transparent;
     color: {ACCENT};
     border: none;
-    border-top-left-radius: 6px;
-    border-bottom-left-radius: 6px;
-    padding: 0px 12px;
-    font-size: 11.5px;
+    border-top-left-radius: 7px;
+    border-bottom-left-radius: 7px;
+    padding: 0px 13px;
+    min-height: 28px;
+    max-height: 28px;
+    font-size: 12px;
     font-weight: 500;
 }}
 QPushButton#exportButton:hover {{ background: {rgba(ACCENT, 0.10)}; }}
@@ -462,8 +518,10 @@ QPushButton#exportMenu {{
     background: transparent;
     border: none;
     border-left: 1px solid {rgba(ACCENT, 0.35)};
-    border-top-right-radius: 6px;
-    border-bottom-right-radius: 6px;
+    border-top-right-radius: 7px;
+    border-bottom-right-radius: 7px;
+    min-height: 28px;
+    max-height: 28px;
 }}
 QPushButton#exportMenu:hover {{ background: {rgba(ACCENT, 0.10)}; }}
 QPushButton#exportMenu:pressed {{ background: {rgba(ACCENT, 0.16)}; }}
@@ -481,6 +539,14 @@ QMenu::item:selected {{ background: {SURFACE_4}; }}
 QMenu::separator {{ height: 1px; background: {HAIRLINE}; margin: 4px 6px; }}
 
 QLabel#dangerLabel {{ color: {DANGER}; }}
+
+QStatusBar {{
+    background: {SURFACE_1};
+    color: {TEXT_3};
+    border-top: 1px solid {HAIRLINE};
+    font-size: 11px;
+}}
+QStatusBar::item {{ border: none; }}
 
 /* ── 对话框：暗色消息框，避免 Qt 默认的黑底默认按钮 ────────── */
 QMessageBox {{
