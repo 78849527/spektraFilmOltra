@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import copy
+import time
 from dataclasses import replace
 
 from qtpy import QtCore, QtWidgets
@@ -20,6 +21,9 @@ from spektrafilm_gui.handoff import (
     handoff_is_current,
     handoff_path,
     has_grade_recipe,
+    read_grade_recipe,
+    read_handoff,
+    write_grade_recipe,
     write_handoff,
 )
 from spektrafilm_gui.library_page import LibraryPage
@@ -113,6 +117,12 @@ class WorkspaceWindow(QMainWindow):
         self._persist_timer.setInterval(1500)
         self._persist_timer.timeout.connect(self._persist_active_state)
 
+        self._grade_persist_timer = QTimer(self)
+        self._grade_persist_timer.setSingleShot(True)
+        self._grade_persist_timer.setInterval(600)
+        self._grade_persist_timer.timeout.connect(self._save_grade_recipe)
+        self._grade_persist_pending = False
+
         self._connect_signals()
         controller.add_simulation_finished_callback(self._on_simulation_finished)
         for registrar, callback in (
@@ -149,6 +159,11 @@ class WorkspaceWindow(QMainWindow):
         self.editor_page.quick_changed.connect(self._schedule_persist)
         self.editor_page.strip_item_selected.connect(self.open_item)
         self.grade_page.back_requested.connect(self.show_editor)
+        self.grade_page.recipe_changed.connect(self._schedule_grade_persist)
+        self.grade_page.export_settings_requested.connect(self._on_export_settings)
+        self.grade_page.grade_image_ready.connect(self._on_grade_image_ready)
+        self.grade_page.status_message.connect(self._show_status)
+        self._grade_persist_pending = False
         set_scale = getattr(self._controller, 'set_preview_render_scale', None)
         if callable(set_scale):
             self.editor_page.preview_scale_changed.connect(set_scale)
@@ -173,7 +188,9 @@ class WorkspaceWindow(QMainWindow):
         if self._controller.is_simulating():
             self._show_status('正在计算，请稍候再返回照片库')
             return
+        self._flush_grade_recipe()
         self._persist_active_state()
+        self.grade_page.unload()
         self._active_item_id = ''
         self._stack.setCurrentIndex(0)
         self.library_page.refresh()
@@ -185,7 +202,10 @@ class WorkspaceWindow(QMainWindow):
     def show_editor(self) -> None:
         if not self._active_item_id or self._stack.currentIndex() != 2:
             return
+        self._flush_grade_recipe()
+        self._persist_active_state()
         self._stack.setCurrentIndex(1)
+        self.grade_page.unload()
         self.setWindowTitle('Spektrafilm')
         self._show_status('显影台')
 
@@ -266,19 +286,20 @@ class WorkspaceWindow(QMainWindow):
         self._show_status('调色交接图已生成')
 
     def _open_grade_page(self, item: LibraryItem) -> None:
-        self.grade_page.set_photo(item)
-        preview = None
-        current = getattr(self._controller, 'current_output_display_image', None)
-        if callable(current):
-            try:
-                preview = current()
-            except (AttributeError, TypeError, ValueError):
-                preview = None
-        self.grade_page.set_preview(preview)
+        handoff = read_handoff(item.state) or {}
+        path = str(handoff.get('path') or '')
+        recipe = read_grade_recipe(item.state)
+        grade = item.state.get('grade') if isinstance(item.state, dict) else None
+        preset_id = str(grade.get('preset_id') or '') if isinstance(grade, dict) else ''
+        loaded = self.grade_page.load(item, path or None, recipe, preset_id=preset_id)
+        self._grade_persist_pending = False
         self._stack.setCurrentIndex(2)
         self.setWindowTitle('Spektrafilm · 调色台')
         motion.fade_in(self.grade_page, duration=200, start=0.6)
-        self._show_status(f'进入调色台 · {item.name}')
+        if loaded:
+            self._show_status(f'进入调色台 · {item.name}')
+        else:
+            self._show_status('交接图读取失败，请返回显影台重新调色')
 
     def open_item(self, item_id: str) -> None:
         if self._controller.is_simulating():
@@ -300,7 +321,9 @@ class WorkspaceWindow(QMainWindow):
             if repaired is not None:
                 item = repaired
 
+        self._flush_grade_recipe()
         self._persist_active_state()
+        self.grade_page.unload()
         state = self._state_for_item(item)
         # 显示/预览偏好是全局的，不能被某张照片的存档带跑
         global_display = self._widgets.display.get_state()
@@ -455,6 +478,53 @@ class WorkspaceWindow(QMainWindow):
         if self._active_item_id:
             self._persist_timer.start()
 
+    # ── 调色配方 ────────────────────────────────────────────────
+    def _schedule_grade_persist(self, _recipe: object | None = None) -> None:
+        self._grade_persist_pending = True
+        self._grade_persist_timer.start()
+
+    def _flush_grade_recipe(self) -> None:
+        self._grade_persist_timer.stop()
+        if self._grade_persist_pending or self._stack.currentIndex() == 2:
+            self._grade_persist_pending = True
+            self._save_grade_recipe()
+
+    def _save_grade_recipe(self) -> None:
+        if not self._grade_persist_pending or not self._active_item_id:
+            return
+        self._grade_persist_pending = False
+        item = self.store.item(self._active_item_id)
+        if item is None:
+            return
+        recipe = self.grade_page.recipe()
+        preset_id = self.grade_page.preset_id()
+        state_data = dict(item.state) if isinstance(item.state, dict) else {}
+        if recipe.is_identity():
+            grade = state_data.get('grade')
+            if isinstance(grade, dict):
+                grade = dict(grade)
+                grade.pop('recipe', None)
+                grade.pop('preset_id', None)
+                grade['updated_at'] = time.time()
+                state_data['grade'] = grade
+        else:
+            state_data = write_grade_recipe(state_data, recipe, preset_id=preset_id)
+        updated = self.store.update_item(item.id, save=True, state=state_data)
+        if updated is None:
+            return
+        try:
+            self.library_page.refresh_item(updated.id)
+        except (AttributeError, RuntimeError):
+            pass
+        self.editor_page.set_grade_recipe(has_grade_recipe(updated.state))
+
+    def _on_grade_image_ready(self, image, direct: bool) -> None:
+        export = getattr(self._controller, 'export_graded_image', None)
+        if callable(export):
+            export(image, direct=bool(direct))
+        else:
+            self._show_status('当前版本无法导出调色结果')
+
     def _on_simulation_finished(self, result) -> None:
         self.editor_page.set_simulation_busy(False)
         self.editor_page.set_grade_ready(True)
@@ -602,6 +672,7 @@ class WorkspaceWindow(QMainWindow):
             event.ignore()
             return
         self._persist_timer.stop()
+        self._flush_grade_recipe()
         self._persist_active_state()
         self.thumbnails.wait_for_idle(2000)
         super().closeEvent(event)

@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from spektrafilm_gui import app_paths
+from spektrafilm_gui.grade_recipe import GradeRecipe
 
 SCHEMA_VERSION = 1
 HANDOFF_FORMAT = 'tiff16-prophoto-linear'
@@ -67,6 +68,13 @@ def _grade_section(state_data: Mapping[str, Any] | None) -> dict[str, Any]:
     return dict(grade) if isinstance(grade, Mapping) else {}
 
 
+def _grade_schema(grade: Mapping[str, Any]) -> int:
+    try:
+        return max(int(grade.get('schema') or 0), SCHEMA_VERSION)
+    except (TypeError, ValueError):
+        return SCHEMA_VERSION
+
+
 def read_handoff(state_data: Mapping[str, Any] | None) -> dict[str, Any] | None:
     handoff = _grade_section(state_data).get('handoff')
     return dict(handoff) if isinstance(handoff, Mapping) else None
@@ -93,7 +101,7 @@ def write_handoff(
     """把交接图信息合并进 state['grade']，保留已有的调色配方。"""
     data = copy.deepcopy(dict(state_data)) if isinstance(state_data, Mapping) else {}
     grade = _grade_section(data)
-    grade['schema'] = max(int(grade.get('schema') or 0), SCHEMA_VERSION)
+    grade['schema'] = _grade_schema(grade)
     grade['handoff'] = {
         'path': str(path),
         'fingerprint': str(fingerprint),
@@ -112,6 +120,29 @@ def has_grade_recipe(state_data: Mapping[str, Any] | None) -> bool:
     return isinstance(recipe, Mapping) and bool(recipe)
 
 
+def read_grade_recipe(state_data: Mapping[str, Any] | None) -> GradeRecipe:
+    """读取配方；缺失或损坏时回退到全中性配方。"""
+    recipe = _grade_section(state_data).get('recipe')
+    return GradeRecipe.from_dict(recipe) if isinstance(recipe, Mapping) else GradeRecipe()
+
+
+def write_grade_recipe(
+    state_data: Mapping[str, Any] | None,
+    recipe: GradeRecipe,
+    *,
+    preset_id: str = '',
+) -> dict[str, Any]:
+    """把配方合并进 state['grade']，保留 handoff 信息。"""
+    data = copy.deepcopy(dict(state_data)) if isinstance(state_data, Mapping) else {}
+    grade = _grade_section(data)
+    grade['schema'] = _grade_schema(grade)
+    grade['recipe'] = recipe.to_dict()
+    grade['preset_id'] = str(preset_id or '')
+    grade['updated_at'] = time.time()
+    data['grade'] = grade
+    return data
+
+
 __all__ = [
     'HANDOFF_FILENAME',
     'HANDOFF_FORMAT',
@@ -120,6 +151,8 @@ __all__ = [
     'handoff_is_current',
     'handoff_path',
     'has_grade_recipe',
+    'read_grade_recipe',
     'read_handoff',
+    'write_grade_recipe',
     'write_handoff',
 ]

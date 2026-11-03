@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 from importlib import import_module
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
@@ -64,6 +65,7 @@ PREVIEW_DEBOUNCE_MS = 120
 PREVIEW_RENDER_SCALES = (1.0, 0.5, 0.25)
 HANDOFF_MODE_LABEL = 'Handoff'
 HANDOFF_COLOR_SPACE = 'ProPhoto RGB'
+GRADED_EXPORT_TEMPLATE = '{name}_graded'
 DIRECT_EXPORT_SETTINGS = DirectExportSettings()
 
 
@@ -607,6 +609,31 @@ class GuiController:
         self._export_with_settings(
             DIRECT_EXPORT_SETTINGS.to_export_settings(long_edge),
             payload=payload,
+        )
+
+    def export_graded_image(self, image: np.ndarray, *, direct: bool = False) -> None:
+        """导出调色台结果：sRGB 编码图，文件名 {name}_graded。"""
+        data = np.asarray(image, dtype=np.float32)
+        if data.ndim != 3 or data.shape[2] < 3:
+            QMessageBox.warning(dialog_parent(self._viewer), '导出', '调色结果不是三通道图像。')
+            return
+        data = np.ascontiguousarray(data[..., :3])
+        long_edge = max(int(value) for value in data.shape[:2])
+        if direct:
+            settings = DIRECT_EXPORT_SETTINGS.to_export_settings(long_edge)
+        else:
+            settings = self._export_settings.normalized()
+        settings = replace(settings, filename_template=GRADED_EXPORT_TEMPLATE)
+
+        source_metadata = None
+        if self._current_input_path is not None:
+            try:
+                source_metadata = read_image_metadata(self._current_input_path)
+            except Exception:  # noqa: BLE001 - 元数据失败不影响导出
+                source_metadata = None
+        self._export_with_settings(
+            settings,
+            payload=(data, 'sRGB', True, source_metadata),
         )
 
     def _export_payload_or_warn(self):

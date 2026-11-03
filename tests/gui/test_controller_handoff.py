@@ -8,6 +8,7 @@ from qtpy import QtWidgets
 
 from spektrafilm_gui import controller as controller_module
 from spektrafilm_gui.controller import GuiController, HANDOFF_MODE_LABEL
+from spektrafilm_gui.export_settings import ExportSettings
 from spektrafilm.utils.io import load_image_oiio
 
 import OpenImageIO as oiio
@@ -83,6 +84,36 @@ def test_start_handoff_refuses_while_simulating(monkeypatch) -> None:
     monkeypatch.setattr(controller_module, 'set_status', lambda *args, **kwargs: None)
 
     assert controller.start_handoff('/tmp/handoff.tif') is False
+
+
+def test_export_graded_image_uses_srgb_and_graded_filename(tmp_path, monkeypatch) -> None:
+    _app()
+    controller = GuiController(viewer=object(), widgets=object())
+    controller._current_input_path = str(tmp_path / 'source.png')
+    controller._export_settings = ExportSettings(format='JPEG')
+    captured: dict[str, object] = {}
+
+    def fake_export(settings, *, payload=None):
+        captured['settings'] = settings
+        captured['payload'] = payload
+
+    monkeypatch.setattr(controller, '_export_with_settings', fake_export)
+    image = np.full((12, 16, 3), 0.5, dtype=np.float32)
+
+    controller.export_graded_image(image)
+    settings = captured['settings']
+    payload = captured['payload']
+    assert settings.filename_template == '{name}_graded'
+    assert settings.format == 'JPEG'
+    assert payload[1] == 'sRGB'
+    assert payload[2] is True
+    assert np.array_equal(payload[0], image)
+
+    controller.export_graded_image(image, direct=True)
+    direct_settings = captured['settings']
+    assert direct_settings.format == 'PNG'
+    assert direct_settings.png_compression == 9
+    assert direct_settings.long_edge == round(16 * 0.9)
 
 
 def test_handoff_failure_notifies_callback_without_dialog(monkeypatch) -> None:

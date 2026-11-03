@@ -11,6 +11,7 @@ from spektrafilm_gui import library_store as store_module
 from spektrafilm_gui import workspace as workspace_module
 from spektrafilm_gui.state import PROJECT_DEFAULT_GUI_STATE
 from spektrafilm_gui.widgets import create_widget_bundle
+from spektrafilm.utils.io import save_image_oiio
 
 
 def _app() -> QtWidgets.QApplication:
@@ -45,6 +46,7 @@ class _FakeController:
         self.export_calls = 0
         self.direct_export_calls = 0
         self.handoff_calls: list[str] = []
+        self.graded_export_calls: list[tuple[tuple[int, ...], bool]] = []
         self.preview_calls = 0
         self.profile_calls: list[str] = []
         self.restore_calls = 0
@@ -90,10 +92,20 @@ class _FakeController:
         self.handoff_calls.append(path)
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(b'handoff')
+        image = np.full((12, 9, 3), 0.4, dtype=np.float32)
+        save_image_oiio(
+            str(target),
+            image,
+            bit_depth=16,
+            color_space='ProPhoto RGB',
+            cctf_encoding=False,
+        )
         if callback is not None:
-            callback(SimpleNamespace(float_image=np.zeros((12, 9, 3))), None)
+            callback(SimpleNamespace(float_image=image), None)
         return True
+
+    def export_graded_image(self, image, *, direct: bool = False) -> None:
+        self.graded_export_calls.append((tuple(np.asarray(image).shape), bool(direct)))
 
     def save_output_layer(self) -> None:
         return
@@ -273,6 +285,71 @@ def test_workspace_generates_handoff_and_enters_grade_page(tmp_path: Path, monke
     window.grade_page.back_requested.emit()
     _app().processEvents()
     assert window._stack.currentIndex() == 1
+
+    window.close()
+
+
+def test_workspace_persists_grade_recipe_and_exports(tmp_path: Path, monkeypatch) -> None:
+    handoff_root = tmp_path / 'projects'
+    monkeypatch.setattr(
+        workspace_module,
+        'handoff_path',
+        lambda item_id: handoff_root / item_id / 'handoff.tif',
+    )
+    window, store, controller = _window(tmp_path)
+    item = store.all_items()[0]
+    window.open_item(item.id)
+    _app().processEvents()
+    window._on_grade_requested()
+    _app().processEvents()
+    assert window._stack.currentIndex() == 2
+
+    row = window.grade_page.deck._rows[('light', 'exposure')]
+    row.set_value_silent(1.0)
+    row.valueChanged.emit(1.0)
+    window._flush_grade_recipe()
+
+    saved = store.item(item.id)
+    assert saved is not None and saved.state is not None
+    recipe = saved.state['grade']['recipe']
+    assert recipe['light']['exposure'] == pytest.approx(1.0)
+
+    window.show_editor()
+    _app().processEvents()
+    assert window._stack.currentIndex() == 1
+
+    window._on_grade_requested()
+    _app().processEvents()
+    assert window._stack.currentIndex() == 2
+    assert window.grade_page.recipe().light.exposure == pytest.approx(1.0)
+
+    window.grade_page.grade_image_ready.emit(np.zeros((12, 9, 3), dtype=np.float32), True)
+    assert controller.graded_export_calls == [((12, 9, 3), True)]
+
+    window.close()
+
+
+def test_workspace_keeps_grade_page_when_handoff_is_corrupt(tmp_path: Path) -> None:
+    window, store, _controller = _window(tmp_path)
+    item = store.all_items()[0]
+    broken = tmp_path / 'broken.tif'
+    broken.write_bytes(b'not a tiff')
+    updated = store.update_item(
+        item.id,
+        state={
+            'grade': {
+                'schema': 1,
+                'handoff': {'path': str(broken), 'format': 'tiff16-prophoto-linear'},
+            },
+        },
+    )
+    assert updated is not None
+
+    window._open_grade_page(updated)
+    _app().processEvents()
+
+    assert window._stack.currentIndex() == 2
+    assert '读取失败' in window.grade_page.canvas._message
 
     window.close()
 
