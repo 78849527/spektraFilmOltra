@@ -1,30 +1,32 @@
 .toggle {
-  width: 32px;
-  height: 18px;
-  border-radius: 9px;
-  background: var(--surface-4);
+  width: 34px;
+  height: 19px;
+  border-radius: 10px;
+  background: var(--well);
+  border: 1px solid rgba(255, 255, 255, 0.14);
   position: relative;
   flex: 0 0 auto;
-  transition: background var(--motion-state) ease-out;
+  transition: background var(--motion-state) var(--ease-out-expo), border-color var(--motion-state) var(--ease-out-expo);
 }
 
 .toggle.on {
   background: var(--accent);
+  border-color: var(--accent);
 }
 
 .toggle-knob {
   position: absolute;
   top: 2px;
   left: 2px;
-  width: 14px;
-  height: 14px;
+  width: 13px;
+  height: 13px;
   border-radius: 50%;
   background: var(--text-1);
-  transition: transform var(--motion-state) cubic-bezier(0.22, 1, 0.36, 1);
+  transition: transform var(--motion-state) var(--ease-spring);
 }
 
 .toggle.on .toggle-knob {
-  transform: translateX(14px);
+  transform: translateX(15px);
   background: var(--accent-on);
 }
 
@@ -57,33 +59,35 @@
   border-radius: 50%;
   background: var(--text-1);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
-  transition: transform var(--motion-hover) ease-out, box-shadow var(--motion-hover) ease-out;
+  transition: transform var(--motion-hover) var(--ease-out-expo), box-shadow var(--motion-hover) var(--ease-out-expo);
 }
 
 .slider:hover::-webkit-slider-thumb {
   transform: scale(1.12);
-  box-shadow: 0 0 0 3px rgba(197, 163, 115, 0.14);
+  box-shadow: 0 0 0 3px rgba(255, 90, 31, 0.16);
 }
 
 .slider:active::-webkit-slider-thumb {
   transform: scale(1.05);
 }
 
+/* ── 分段控件（欧创 §7.2：激活段用内嵌橙描边，不填充） ── */
 .segmented {
   display: inline-flex;
   padding: 2px;
   border-radius: var(--radius-control);
-  background: var(--surface-1);
+  background: var(--canvas);
   border: 1px solid var(--hairline);
 }
 
 .segmented-item {
-  height: 24px;
-  padding: 0 11px;
+  height: 22px;
+  padding: 0 10px;
   border-radius: 5px;
-  font-size: 11.5px;
-  color: var(--text-3);
-  transition: color var(--motion-hover) ease-out, background var(--motion-hover) ease-out;
+  font-size: 11px;
+  color: var(--text-4);
+  box-shadow: inset 0 0 0 1px transparent;
+  transition: color var(--motion-hover) var(--ease-out-expo), box-shadow var(--motion-hover) var(--ease-out-expo);
 }
 
 .segmented-item:hover {
@@ -91,22 +95,24 @@
 }
 
 .segmented-item.active {
-  color: var(--text-1);
-  background: var(--surface-3);
+  color: var(--accent-text);
+  box-shadow: inset 0 0 0 1px var(--accent);
 }
 
+/* ── Tab ── */
 .tabs {
   display: flex;
-  gap: 18px;
-  border-bottom: 1px solid var(--hairline);
+  gap: 16px;
+  border-bottom: 1px solid var(--hairline-faint);
 }
 
 .tab {
-  height: 34px;
-  font-size: 12px;
-  color: var(--text-3);
+  height: 32px;
+  font-size: 11.5px;
+  color: var(--text-4);
   position: relative;
-  transition: color var(--motion-hover) ease-out;
+  white-space: nowrap;
+  transition: color var(--motion-hover) var(--ease-out-expo);
 }
 
 .tab:hover {
@@ -123,31 +129,31 @@
   left: 0;
   right: 0;
   bottom: -1px;
-  height: 1.5px;
+  height: 1px;
   background: var(--accent);
-  border-radius: 1px;
 }
 
+/* ── 搜索框 ── */
 .search-field {
-  height: 30px;
+  height: 28px;
   display: inline-flex;
   align-items: center;
   gap: 7px;
   padding: 0 10px;
   border-radius: var(--radius-control);
-  background: var(--surface-1);
-  border: 1px solid var(--hairline);
-  color: var(--text-3);
-  transition: border-color var(--motion-hover) ease-out, box-shadow var(--motion-state) ease-out;
+  background: var(--well);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  color: var(--text-4);
+  transition: box-shadow var(--motion-state) var(--ease-out-expo), color var(--motion-hover) var(--ease-out-expo);
 }
 
 .search-field:focus-within {
-  border-color: rgba(197, 163, 115, 0.5);
-  box-shadow: 0 0 0 3px rgba(197, 163, 115, 0.09);
+  color: var(--accent-text);
+  box-shadow: 0 0 0 1px var(--accent-ring), inset 0 0 0 1px rgba(255, 255, 255, 0.08);
 }
 
 .search-field input {
-  width: 150px;
+  width: 140px;
   background: transparent;
   border: 0;
   outline: none;
@@ -157,28 +163,56 @@
 }
 
 .search-field input::placeholder {
-  color: var(--text-4);
+  color: var(--text-placeholder);
 }
 
+/* ── 下拉：内嵌井底、默认无描边，靠底色凹进去 ── */
 .select {
   height: 28px;
-  padding: 0 8px;
-  border-radius: var(--radius-control);
-  background: var(--surface-1);
-  border: 1px solid var(--hairline);
+  padding: 0 6px;
+  border-radius: 5px;
+  background: var(--well);
+  border: 1px solid transparent;
   color: var(--text-2);
-  font-size: 11.5px;
+  font-size: 11px;
   outline: none;
   min-width: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--text-4) 50%),
+    linear-gradient(135deg, var(--text-4) 50%, transparent 50%);
+  background-position: calc(100% - 11px) calc(50% + 1px), calc(100% - 7px) calc(50% + 1px);
+  background-size: 4px 4px, 4px 4px;
+  background-repeat: no-repeat;
+  padding-right: 20px;
+  transition: background-color var(--motion-hover) var(--ease-out-expo),
+    box-shadow var(--motion-state) var(--ease-out-expo);
+}
+
+.select:hover {
+  background-color: var(--surface-1);
 }
 
 .select:focus {
-  border-color: rgba(197, 163, 115, 0.5);
+  box-shadow: 0 0 0 1px var(--accent-ring), inset 0 0 0 1px rgba(255, 255, 255, 0.06);
 }
 
+/* 隐藏边框的下拉（画布工具栏等浮层内使用） */
+.select.borderless {
+  background-color: transparent;
+  border-color: transparent;
+  color: var(--text-3);
+}
+
+.select.borderless:hover {
+  background-color: var(--wash);
+  color: var(--text-1);
+}
+
+/* ── 数值行 ── */
 .value-row {
-  padding: 8px 0 9px;
-  transition: opacity var(--motion-state) ease-out;
+  padding: 7px 0 8px;
+  transition: opacity var(--motion-state) var(--ease-out-expo);
 }
 
 .value-row.disabled {
@@ -190,52 +224,69 @@
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  margin-bottom: 5px;
+  gap: 8px;
+  margin-bottom: 4px;
 }
 
 .value-row-label {
-  font-size: 11.5px;
+  font-size: 11px;
   color: var(--text-2);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .value-row-readout {
-  font-size: 10.5px;
+  font-size: 10px;
   color: var(--text-3);
   cursor: default;
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
 }
 
-.value-row-disabled .value-row-readout {
-  color: var(--text-4);
-}
-
+/* ── 字段行：标签固定宽、控件等长 ── */
 .field-row {
-  min-height: 38px;
+  min-height: 36px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 10px;
 }
 
 .field-row-label {
-  font-size: 11.5px;
+  flex: 0 0 78px;
+  font-size: 11px;
   color: var(--text-2);
-  flex: 0 0 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .field-row-control {
   flex: 1 1 auto;
   display: flex;
-  justify-content: flex-end;
+  justify-content: flex-start;
   min-width: 0;
 }
 
+.field-row-control > .select,
+.field-row-control > .input {
+  width: 100%;
+}
+
+.field-row-control > .button {
+  width: 100%;
+  justify-content: flex-start;
+}
+
+/* ── 折叠：0fr → 1fr，不用 JS 测高 ── */
 .disclosure {
   border-bottom: 1px solid var(--hairline-faint);
 }
 
 .disclosure-head {
   width: 100%;
-  height: 40px;
+  height: 36px;
   display: flex;
   align-items: center;
   gap: 7px;
@@ -247,14 +298,16 @@
 }
 
 .disclosure-title {
-  font-size: 12px;
-  font-weight: 600;
+  font-size: 11.5px;
+  font-weight: 500;
   letter-spacing: 0.02em;
+  white-space: nowrap;
 }
 
 .chevron {
-  transition: transform var(--motion-state) ease-out;
+  transition: transform var(--motion-panel) var(--ease-out-expo);
   color: var(--text-4);
+  flex: 0 0 auto;
 }
 
 .chevron.open {
@@ -266,10 +319,20 @@
 }
 
 .disclosure-body {
-  overflow: hidden;
-  transition: height var(--motion-state) ease-out;
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows var(--motion-panel) var(--ease-out-expo);
 }
 
-.disclosure-body > div {
+.disclosure-body.open {
+  grid-template-rows: 1fr;
+}
+
+.disclosure-inner {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.disclosure-inner > div {
   padding-bottom: 10px;
 }

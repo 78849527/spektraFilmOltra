@@ -14,6 +14,7 @@ body {
   color: var(--text-2);
   font-family: var(--font-ui);
   font-size: 12px;
+  font-weight: 400;
   line-height: 1.45;
   -webkit-font-smoothing: antialiased;
   overflow: hidden;
@@ -35,26 +36,16 @@ select {
   color: inherit;
 }
 
+/* 所有列表一律不显示滚动条，但仍可滚动 */
 ::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: 0;
+  height: 0;
+  display: none;
 }
 
-::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.07);
-  border-radius: 6px;
-  border: 3px solid transparent;
-  background-clip: padding-box;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.13);
-  background-clip: padding-box;
-  border: 3px solid transparent;
-}
-
-::-webkit-scrollbar-track {
-  background: transparent;
+* {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
 }
 
 .app-shell {
@@ -62,7 +53,7 @@ select {
   flex-direction: column;
   height: 100%;
   background: var(--app);
-  animation: page-in var(--motion-page) ease-out;
+  animation: page-in var(--motion-page) var(--ease-out-expo);
 }
 
 .titlebar {
@@ -80,7 +71,7 @@ select {
   font-size: 9px;
   font-weight: 500;
   letter-spacing: 0.22em;
-  color: var(--text-3);
+  color: var(--text-4);
   text-transform: uppercase;
 }
 
@@ -101,7 +92,7 @@ select {
 }
 
 .page-title {
-  font-size: 23px;
+  font-size: 21px;
   font-weight: 500;
   color: var(--text-1);
   letter-spacing: -0.01em;
@@ -109,7 +100,7 @@ select {
 
 .section-title {
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 500;
   color: var(--text-2);
   letter-spacing: 0.02em;
 }
@@ -117,11 +108,13 @@ select {
 .caption {
   font-size: 11px;
   color: var(--text-3);
+  text-wrap: pretty;
 }
 
 .micro {
   font-size: 10px;
   color: var(--text-4);
+  text-wrap: pretty;
 }
 
 .meta {
@@ -136,45 +129,57 @@ select {
   font-variant-numeric: tabular-nums;
 }
 
+/* ── 按钮族（欧创 §7.1：主按钮=透明底+橙描边+橙字） ── */
 .button {
   height: 30px;
-  padding: 0 13px;
+  padding: 0 12px;
   border-radius: var(--radius-control);
-  font-size: 12px;
-  font-weight: 500;
+  border: 1px solid transparent;
+  font-size: 11.5px;
+  font-weight: 400;
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: 6px;
   white-space: nowrap;
-  transition: background var(--motion-hover) ease-out, color var(--motion-hover) ease-out,
-    border-color var(--motion-hover) ease-out;
+  line-height: 1;
+  transition: background var(--motion-hover) var(--ease-out-expo),
+    color var(--motion-hover) var(--ease-out-expo), border-color var(--motion-hover) var(--ease-out-expo);
+}
+
+.button:active:not(:disabled) {
+  transform: scale(0.97);
 }
 
 .button:disabled {
   opacity: 0.45;
+  cursor: default;
 }
 
 .button-primary {
-  background: var(--accent);
-  color: var(--accent-on);
+  background: transparent;
+  border-color: var(--accent-line);
+  color: var(--accent-text);
 }
 
 .button-primary:hover:not(:disabled) {
-  background: var(--accent-hover);
+  border-color: var(--accent);
+  color: var(--accent-text-hover);
 }
 
 .button-primary:active:not(:disabled) {
-  background: var(--accent-pressed);
+  background: rgba(255, 90, 31, 0.16);
+  color: var(--accent-text-hover);
 }
 
 .button-secondary {
   background: transparent;
   color: var(--text-2);
-  border: 1px solid var(--hairline-strong);
+  border: 1px solid rgba(255, 255, 255, 0.18);
 }
 
 .button-secondary:hover:not(:disabled) {
   background: var(--wash);
+  border-color: rgba(255, 255, 255, 0.32);
   color: var(--text-1);
 }
 
@@ -195,7 +200,7 @@ select {
   align-items: center;
   justify-content: center;
   color: var(--text-3);
-  transition: background var(--motion-hover) ease-out, color var(--motion-hover) ease-out;
+  transition: background var(--motion-hover) var(--ease-out-expo), color var(--motion-hover) var(--ease-out-expo);
 }
 
 .icon-button:hover {
@@ -207,9 +212,10 @@ select {
   color: var(--accent);
 }
 
+/* ── Chip / 徽标 ── */
 .chip {
-  height: 26px;
-  padding: 0 11px;
+  height: 24px;
+  padding: 0 10px;
   border-radius: var(--radius-pill);
   border: 1px solid var(--hairline);
   color: var(--text-3);
@@ -218,39 +224,43 @@ select {
   align-items: center;
   gap: 5px;
   white-space: nowrap;
-  transition: all var(--motion-hover) ease-out;
+  transition: background var(--motion-hover) var(--ease-out-expo), color var(--motion-hover) var(--ease-out-expo),
+    border-color var(--motion-hover) var(--ease-out-expo);
 }
 
 .chip:hover {
   color: var(--text-1);
   border-color: var(--hairline-strong);
+  background: var(--wash);
 }
 
 .chip.active {
-  color: var(--text-1);
-  border-color: rgba(197, 163, 115, 0.55);
-  background: rgba(197, 163, 115, 0.08);
+  color: var(--accent-text);
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
 }
 
+/* ── 输入（聚焦=外阴影+内环咬合，不用亮线） ── */
 .input {
-  height: 30px;
+  height: 28px;
   padding: 0 10px;
   border-radius: var(--radius-control);
-  background: var(--surface-1);
-  border: 1px solid var(--hairline);
+  background: var(--well);
+  border: 1px solid rgba(255, 255, 255, 0.07);
   color: var(--text-1);
-  font-size: 12px;
+  font-size: 11.5px;
   outline: none;
-  transition: border-color var(--motion-hover) ease-out, box-shadow var(--motion-state) ease-out;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.04);
+  transition: box-shadow var(--motion-state) var(--ease-out-expo), background var(--motion-hover) var(--ease-out-expo);
 }
 
 .input::placeholder {
-  color: var(--text-4);
+  color: var(--text-placeholder);
 }
 
 .input:focus {
-  border-color: rgba(197, 163, 115, 0.5);
-  box-shadow: 0 0 0 3px rgba(197, 163, 115, 0.1);
+  box-shadow: 0 0 0 1px var(--accent-ring), inset 0 0 0 1px rgba(255, 255, 255, 0.08),
+    0 8px 24px rgba(0, 0, 0, 0.45);
 }
 
 .card {
@@ -260,7 +270,7 @@ select {
 }
 
 .card-hover {
-  transition: border-color var(--motion-hover) ease-out, background var(--motion-hover) ease-out;
+  transition: border-color var(--motion-hover) var(--ease-out-expo), background var(--motion-hover) var(--ease-out-expo);
 }
 
 .card-hover:hover {
@@ -302,11 +312,11 @@ select {
   0%,
   100% {
     opacity: 0.35;
-    box-shadow: 0 0 0 rgba(197, 163, 115, 0);
+    box-shadow: 0 0 0 rgba(255, 90, 31, 0);
   }
   50% {
     opacity: 0.9;
-    box-shadow: 0 0 24px rgba(197, 163, 115, 0.18);
+    box-shadow: 0 0 24px rgba(255, 90, 31, 0.18);
   }
 }
 
@@ -323,59 +333,70 @@ select {
   width: 46px;
   height: 46px;
   border-radius: 50%;
-  border: 1px solid rgba(197, 163, 115, 0.4);
+  border: 1px solid rgba(255, 90, 31, 0.4);
   animation: breathe 2.4s ease-in-out infinite;
 }
 
 .boot-text {
   font-size: 9px;
   letter-spacing: 0.24em;
-  color: var(--text-3);
+  color: var(--text-4);
 }
 
+/* ── 瞬时提示：底部居中，自动隐身 ── */
 .toast {
   position: fixed;
   left: 50%;
   bottom: 26px;
   transform: translateX(-50%);
   max-width: 520px;
-  padding: 10px 16px;
-  border-radius: var(--radius-card);
-  background: var(--surface-2);
+  padding: 9px 16px;
+  border-radius: var(--radius-control);
+  background: var(--surface-3);
   border: 1px solid var(--hairline-strong);
   color: var(--text-1);
   font-size: 12px;
-  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.45);
-  animation: toast-in 220ms ease-out;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.07);
+  animation: toast-in 220ms var(--ease-out-expo);
   z-index: 40;
 }
 
 .toast.error {
-  border-color: rgba(192, 112, 93, 0.55);
+  border-color: rgba(255, 95, 86, 0.55);
 }
 
 @keyframes toast-in {
   from {
     opacity: 0;
-    transform: translate(-50%, 8px);
+    transform: translate(-50%, 10px) scale(0.95);
   }
   to {
     opacity: 1;
-    transform: translate(-50%, 0);
+    transform: translate(-50%, 0) scale(1);
   }
 }
 
 .badge {
   font-size: 9px;
-  padding: 1px 5px;
-  border-radius: 4px;
-  border: 1px solid var(--hairline-strong);
+  font-weight: 400;
+  padding: 1px 6px;
+  border-radius: 9999px;
+  border: 1px solid var(--hairline);
+  background: var(--fill-2);
   color: var(--text-3);
-  letter-spacing: 0.06em;
+  letter-spacing: 0.02em;
+  line-height: 1.35;
 }
 
 .badge-accent {
-  color: var(--accent);
-  border-color: rgba(197, 163, 115, 0.4);
-  background: rgba(197, 163, 115, 0.07);
+  color: var(--accent-text);
+  border-color: rgba(255, 90, 31, 0.3);
+  background: rgba(255, 90, 31, 0.15);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }

@@ -2,8 +2,9 @@ import { useMemo, useState } from 'react'
 import { errorMessage, pickFolder, pickImages, request } from '../api'
 import { Button, Chip, IconButton, SearchField } from '../components/Controls'
 import { Icon } from '../components/Icons'
+import { useSmoothScroll } from '../components/scroll'
 import { Thumb } from '../components/Thumb'
-import { formatSize, photoAspect } from '../state'
+import { formatSize } from '../state'
 import type { Bootstrap, ItemRecord, LibrarySnapshot } from '../types'
 import './pages.css'
 
@@ -54,6 +55,7 @@ export function LibraryPage({
   const [search, setSearch] = useState('')
   const [sort, setSort] = useState<SortKey>('name')
   const [view, setView] = useState<ViewMode>('grid')
+  const contentRef = useSmoothScroll<HTMLDivElement>('y')
 
   const folders = library.folders.filter((folder) => folder.id !== library.inbox_id)
 
@@ -106,10 +108,10 @@ export function LibraryPage({
           </span>
         </div>
         <div className="row" style={{ gap: 8 }}>
-          <Button icon="folder" kind="secondary" onClick={importFolder}>
+          <Button icon="folder" kind="secondary" height={28} onClick={importFolder}>
             导入文件夹
           </Button>
-          <Button icon="importArrow" kind="primary" onClick={importPhotos}>
+          <Button icon="importArrow" kind="primary" height={28} onClick={importPhotos}>
             导入照片
           </Button>
         </div>
@@ -170,13 +172,13 @@ export function LibraryPage({
           </Button>
         </div>
       ) : (
-        <div className={`library-content ${view}`}>
+        <div className={`library-content ${view}`} ref={contentRef}>
           {view === 'grid' ? (
             <div className="photo-grid">
               {items.map((item) => (
                 <button key={item.id} className="photo-card" onClick={() => onOpen(item)}>
-                  <div className="photo-card-media" style={{ aspectRatio: photoAspect(item.width, item.height) }}>
-                    <Thumb item={item} className="photo-card-image" />
+                  <div className="photo-card-media">
+                    <Thumb item={item} className="photo-card-thumb" />
                     <div className="photo-card-top">
                       {item.is_raw ? <span className="badge">RAW</span> : null}
                       {item.adjusted ? <span className="badge badge-accent">已调整</span> : null}
@@ -204,7 +206,7 @@ export function LibraryPage({
             <div className="photo-list">
               {items.map((item) => (
                 <button key={item.id} className="photo-row" onClick={() => onOpen(item)}>
-                  <Thumb item={item} className="photo-row-image" />
+                  <Thumb item={item} className="photo-row-media" />
                   <div className="grow stack" style={{ minWidth: 0 }}>
                     <div className="row" style={{ gap: 6 }}>
                       <span className="photo-card-name truncate">{item.name}</span>

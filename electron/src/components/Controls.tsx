@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import type { ReactNode } from 'react'
 import { Icon } from './Icons'
 import './controls.css'
 
@@ -73,6 +73,26 @@ export function Toggle({ checked, onChange }: { checked: boolean; onChange: (val
     <button className={`toggle${checked ? ' on' : ''}`} onClick={() => onChange(!checked)}>
       <span className="toggle-knob" />
     </button>
+  )
+}
+
+export function SwitchRow({
+  label,
+  checked,
+  onChange,
+  hint,
+}: {
+  label: string
+  checked: boolean
+  onChange: (value: boolean) => void
+  hint?: string
+}) {
+  return (
+    <div className="switch-row" title={hint}>
+      <span className="switch-row-label">{label}</span>
+      <span className="grow" />
+      <Toggle checked={checked} onChange={onChange} />
+    </div>
   )
 }
 
@@ -194,7 +214,7 @@ export function ValueRow({
 
 export function FieldRow({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="field-row">
+    <div className="field-row" title={label}>
       <span className="field-row-label">{label}</span>
       <div className="field-row-control">{children}</div>
     </div>
@@ -206,14 +226,21 @@ export function Select({
   options,
   onChange,
   disabled,
+  borderless,
 }: {
   value: string
   options: Array<{ value: string; label: string }>
   onChange: (value: string) => void
   disabled?: boolean
+  borderless?: boolean
 }) {
   return (
-    <select className="select" value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)}>
+    <select
+      className={`select${borderless ? ' borderless' : ''}`}
+      value={value}
+      disabled={disabled}
+      onChange={(event) => onChange(event.target.value)}
+    >
       {options.map((option) => (
         <option key={option.value} value={option.value}>
           {option.label}
@@ -236,19 +263,6 @@ export function Disclosure({
   children: ReactNode
   badge?: string
 }) {
-  const bodyRef = useRef<HTMLDivElement>(null)
-  const [height, setHeight] = useState<number | 'auto'>(open ? 'auto' : 0)
-
-  useEffect(() => {
-    if (!bodyRef.current) return
-    const target = bodyRef.current.scrollHeight
-    setHeight(open ? target : 0)
-    if (open) {
-      const timer = window.setTimeout(() => setHeight('auto'), 220)
-      return () => window.clearTimeout(timer)
-    }
-  }, [open, children])
-
   return (
     <div className="disclosure">
       <button className="disclosure-head" onClick={onToggle}>
@@ -257,8 +271,10 @@ export function Disclosure({
         {badge ? <span className="badge badge-accent">{badge}</span> : null}
         <span className="grow" />
       </button>
-      <div className="disclosure-body" style={{ height: typeof height === 'number' ? `${height}px` : height }}>
-        <div ref={bodyRef}>{children}</div>
+      <div className={`disclosure-body${open ? ' open' : ''}`}>
+        <div className="disclosure-inner">
+          <div>{children}</div>
+        </div>
       </div>
     </div>
   )

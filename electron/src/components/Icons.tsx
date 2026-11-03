@@ -23,6 +23,8 @@ const paths: Record<string, string[]> = {
   caretDown: ['M4.5 6.5 8 10l3.5-3.5'],
   importArrow: ['M8 3.5v8', 'M5 6 8 3.5l3 3.5', 'M2.5 12.5h11'],
   dot: ['M8 8h.01'],
+  border: ['M2.5 2.5h11v11h-11z', 'M5.2 5.2h5.6v5.6h-5.6z'],
+  frame: ['M2.5 2.5h11v11h-11z', 'M5 5h6v6h-6z', 'M2.5 5h11M2.5 11h11M5 2.5v11M11 2.5v11'],
 }
 
 interface IconProps extends Omit<SVGProps<SVGSVGElement>, 'name'> {
@@ -50,6 +52,60 @@ export function Icon({ name, size = 16, ...rest }: IconProps) {
       ) : (
         entries.map((d, index) => <path key={index} d={d} />)
       )}
+    </svg>
+  )
+}
+
+/* 胶片条：所有胶片共用同一几何，只换描边色来区分 */
+export function FilmGlyph({
+  size = 30,
+  tint,
+  ...rest
+}: { size?: number; tint?: string } & Omit<SVGProps<SVGSVGElement>, 'color'>) {
+  const holes = [1.9, 4.1, 6.3, 8.5, 10.7, 12.9]
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke={tint ?? 'currentColor'}
+      strokeWidth={1}
+      strokeLinejoin="round"
+      {...rest}
+    >
+      <rect x="4.1" y="0.8" width="7.8" height="14.4" rx="1.3" />
+      <rect x="6.3" y="1.9" width="3.4" height="12.2" rx="0.4" opacity="0.5" />
+      {holes.map((y) => (
+        <g key={y}>
+          <rect x="4.9" y={y} width="1" height="1.2" rx="0.3" />
+          <rect x="10.1" y={y} width="1" height="1.2" rx="0.3" />
+        </g>
+      ))}
+    </svg>
+  )
+}
+
+/* 相纸：同样的方框、同样的线宽，用中性色调区分 */
+export function PaperGlyph({
+  size = 30,
+  tint,
+  ...rest
+}: { size?: number; tint?: string } & Omit<SVGProps<SVGSVGElement>, 'color'>) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke={tint ?? 'currentColor'}
+      strokeWidth={1}
+      strokeLinejoin="round"
+      {...rest}
+    >
+      <path d="M4 1.2h5.2L13 4.9v9.1a0.8 0.8 0 0 1-0.8 0.8H4a0.8 0.8 0 0 1-0.8-0.8V2a0.8 0.8 0 0 1 0.8-0.8z" />
+      <path d="M9.2 1.2v3.7h3.8" opacity="0.7" />
+      <path d="M5.6 8.6h4.8M5.6 10.8h4.8" opacity="0.45" />
     </svg>
   )
 }

@@ -50,7 +50,6 @@ export function ExportDialog({
             <FieldRow label="质量">
               <input
                 className="input num"
-                style={{ width: 78 }}
                 value={settings.jpeg_quality}
                 onChange={(event) => update('jpeg_quality', Number(event.target.value) || 1)}
               />
@@ -89,20 +88,18 @@ export function ExportDialog({
           <FieldRow label="长边像素">
             <input
               className="input num"
-              style={{ width: 92 }}
               value={settings.long_edge}
               onChange={(event) => update('long_edge', Number(event.target.value) || 0)}
             />
           </FieldRow>
           <FieldRow label="目录">
-            <button className="button button-secondary" style={{ height: 28, flex: 1, justifyContent: 'flex-start' }} onClick={chooseDirectory}>
+            <button className="button button-secondary" onClick={chooseDirectory}>
               <span className="truncate">{settings.directory || '与原文件相同'}</span>
             </button>
           </FieldRow>
           <FieldRow label="文件名">
             <input
               className="input"
-              style={{ width: '100%' }}
               value={settings.filename_template}
               onChange={(event) => update('filename_template', event.target.value)}
             />

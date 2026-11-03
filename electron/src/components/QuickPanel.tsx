@@ -1,6 +1,6 @@
 import { useRef } from 'react'
 import type { QuickAxisSpec, QuickGroup, QuickItem } from '../types'
-import { ValueRow } from './Controls'
+import { SwitchRow, ValueRow } from './Controls'
 
 function formatAxis(axis: QuickAxisSpec, value: number): string {
   const text = axis.decimals > 0 ? value.toFixed(axis.decimals) : String(Math.round(value))
@@ -92,12 +92,16 @@ export function QuickPanel({
   disabled,
   onChange,
   onCommit,
+  borderOn,
+  onBorderChange,
 }: {
   layout: QuickGroup[]
   intents: Record<string, number>
   disabled: string[]
   onChange: (axis: string, value: number) => void
   onCommit: (axis: string, value: number) => void
+  borderOn: boolean
+  onBorderChange: (value: boolean) => void
 }) {
   const isDisabled = (id: string) => disabled.includes(id)
 
@@ -140,6 +144,16 @@ export function QuickPanel({
           })}
         </div>
       ))}
+
+      <div className="quick-group">
+        <div className="quick-group-title">边框</div>
+        <SwitchRow
+          label="预览边框"
+          checked={borderOn}
+          onChange={onBorderChange}
+          hint="只影响显影台预览白边，不写入成片；宽度由专业页的白边比例控制"
+        />
+      </div>
     </div>
   )
 }

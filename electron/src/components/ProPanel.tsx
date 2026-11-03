@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { readPath } from '../state'
 import type { Bootstrap, ProfileEntry, StateTree } from '../types'
-import { Disclosure, FieldRow, Select, Toggle, ValueRow } from './Controls'
+import { Disclosure, FieldRow, Select, SwitchRow, Toggle, ValueRow } from './Controls'
 
 function numberAt(state: StateTree, path: string, fallback = 0): number {
   const value = readPath(state, path)
@@ -27,11 +27,15 @@ export function ProPanel({
   bootstrap,
   onPath,
   onSelectProfile,
+  borderOn,
+  onBorderChange,
 }: {
   state: StateTree
   bootstrap: Bootstrap
   onPath: (path: string, value: unknown) => void
   onSelectProfile: (kind: 'film' | 'paper', id: string) => void
+  borderOn: boolean
+  onBorderChange: (value: boolean) => void
 }) {
   const [open, setOpen] = useState<Record<string, boolean>>({
     film: true,
@@ -242,6 +246,12 @@ export function ProPanel({
       </Disclosure>
 
       <Disclosure title="显示" open={open.display} onToggle={() => toggle('display')}>
+        <SwitchRow
+          label="预览边框"
+          checked={borderOn}
+          onChange={onBorderChange}
+          hint="只影响显影台预览白边，不写入成片；宽度由下面的白边比例控制"
+        />
         {slider('white-padding', 'display.white_padding', '白边比例', 0, 0.2, 0.005, 3)}
         {slider('preview-size', 'display.preview_max_size', '预览长边', 128, 2048, 128, 0, ' px')}
       </Disclosure>

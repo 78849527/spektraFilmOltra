@@ -1,14 +1,15 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { errorMessage, mediaUrl, pickLut, request, waitForJob } from '../api'
-import { Button, Disclosure, FieldRow, Tabs, ValueRow } from '../components/Controls'
+import { Button, Disclosure, FieldRow, SwitchRow, Tabs, ValueRow } from '../components/Controls'
 import { ExportDialog } from '../components/ExportDialog'
 import { Histogram } from '../components/Histogram'
 import { Icon } from '../components/Icons'
+import { useElementSize, useSmoothScroll } from '../components/scroll'
 import type { Bootstrap, ExportSettings, ItemRecord, PresetEntry, Recipe } from '../types'
 import './pages.css'
 
 interface GradePreview {
-  path: string
+  image_path: string
   width: number
   height: number
   analysis: {
@@ -23,6 +24,18 @@ interface GradePreview {
 interface LutEntry {
   name: string
   path: string
+}
+
+type BorderStyle = 'black' | 'white'
+
+const BORDER_COLORS: Record<BorderStyle, string> = {
+  black: '#000000',
+  white: '#f6f3ec',
+}
+
+const BORDER_LABELS: Record<BorderStyle, string> = {
+  black: '黑框',
+  white: '白框',
 }
 
 function read(root: unknown, path: string): number {
@@ -67,14 +80,22 @@ export function GradePage({
   const [presets, setPresets] = useState<PresetEntry[]>([])
   const [activePreset, setActivePreset] = useState('')
   const [luts, setLuts] = useState<LutEntry[]>([])
-  const [railTab, setRailTab] = useState<'lut' | 'preset'>('lut')
+  const [railTab, setRailTab] = useState<'lut' | 'preset' | 'border'>('lut')
   const [saveOpen, setSaveOpen] = useState(false)
   const [saveName, setSaveName] = useState('')
   const [exportOpen, setExportOpen] = useState(false)
   const [folds, setFolds] = useState({ curve: false, transparency: false, quality: false, optics: false })
+  const [borderOn, setBorderOn] = useState(false)
+  const [borderStyle, setBorderStyle] = useState<BorderStyle>('white')
+  const [borderWidth, setBorderWidth] = useState(3)
 
   const recipeRef = useRef(recipe)
   recipeRef.current = recipe
+
+  const canvasRef = useRef<HTMLDivElement>(null)
+  const canvasSize = useElementSize(canvasRef)
+  const railRef = useSmoothScroll<HTMLDivElement>('y')
+  const panelRef = useSmoothScroll<HTMLDivElement>('y')
 
   const renderPreview = useCallback(
     async (nextRecipe: Recipe) => {
@@ -176,6 +197,8 @@ export function GradePage({
   async function runExport(settings: ExportSettings) {
     setExportOpen(false)
     try {
+      // 边框目前只在前端叠加预览；后端渲染接口预留：
+      // POST /v1/grade/export 增加 border = { color, width_fraction } 即可烘进成片。
       const { job_id } = await request<{ job_id: string }>('POST', '/v1/grade/export', {
         handoff,
         recipe: recipeRef.current,
@@ -214,8 +237,19 @@ export function GradePage({
   )
 
   const activePresetEntry = presets.find((preset) => preset.id === activePreset)
-  const mediaSrc = preview ? `${mediaUrl(preview.path)}?v=${preview.path.slice(-12)}` : ''
+  const mediaSrc = preview ? `${mediaUrl(preview.image_path)}?v=${preview.image_path.slice(-12)}` : ''
 
+  const fitScale = useMemo(() => {
+    if (!preview || canvasSize.width === 0) return 1
+    return Math.max(
+      0.05,
+      Math.min((canvasSize.width - 108) / preview.width, (canvasSize.height - 96) / preview.height),
+    )
+  }, [preview, canvasSize])
+
+  const framePadding = preview && borderOn
+    ? Math.round(Math.max(preview.width, preview.height) * fitScale * (borderWidth / 100))
+    : 0
   return (
     <div className="grade-page">
       <header className="editor-topbar">
@@ -240,18 +274,19 @@ export function GradePage({
 
       <div className="grade-body">
         <aside className="grade-rail">
-          <div style={{ padding: '10px 12px 4px' }}>
+          <div className="grade-rail-tabs">
             <Tabs
               tabs={[
                 { value: 'lut', label: 'LUT' },
                 { value: 'preset', label: '预设' },
+                { value: 'border', label: '边框' },
               ]}
               value={railTab}
               onChange={setRailTab}
             />
           </div>
 
-          <div style={{ flex: 1, overflow: 'auto', padding: '8px 8px 14px' }}>
+          <div className="grade-rail-scroll" ref={railRef}>
             {railTab === 'lut' ? (
               <>
                 <button
@@ -270,14 +305,16 @@ export function GradePage({
                     <span className="truncate">{lut.name}</span>
                   </button>
                 ))}
-                <div style={{ padding: '10px 10px 0' }}>
+                <div style={{ padding: '10px 6px 0' }}>
                   {slider('lut.strength', 'LUT 强度', 0, 100, 1, 0, '%')}
                   <Button icon="plus" kind="secondary" onClick={() => void importLut()}>
                     导入 LUT
                   </Button>
                 </div>
               </>
-            ) : (
+            ) : null}
+
+            {railTab === 'preset' ? (
               <>
                 {presets.map((preset) => (
                   <button
@@ -301,27 +338,76 @@ export function GradePage({
                   ) : null}
                 </div>
               </>
-            )}
+            ) : null}
+
+            {railTab === 'border' ? (
+              <>
+                <div className="rail-group-title">边框样式</div>
+                <button
+                  className={`border-row${!borderOn ? ' active' : ''}`}
+                  onClick={() => setBorderOn(false)}
+                >
+                  <span className="border-chip">
+                    <span
+                      className="border-chip-swatch"
+                      style={{ border: '1px dashed var(--text-4)', background: 'transparent' }}
+                    />
+                  </span>
+                  <span className="stack grow" style={{ minWidth: 0 }}>
+                    <span className="preset-name truncate">无边框</span>
+                    <span className="preset-meta truncate">不添加任何边</span>
+                  </span>
+                </button>
+                {(['white', 'black'] as BorderStyle[]).map((style) => (
+                  <button
+                    key={style}
+                    className={`border-row${borderOn && borderStyle === style ? ' active' : ''}`}
+                    onClick={() => {
+                      setBorderStyle(style)
+                      setBorderOn(true)
+                    }}
+                  >
+                    <span className="border-chip">
+                      <span className="border-chip-swatch" style={{ background: BORDER_COLORS[style] }} />
+                    </span>
+                    <span className="stack grow" style={{ minWidth: 0 }}>
+                      <span className="preset-name truncate">{BORDER_LABELS[style]}</span>
+                      <span className="preset-meta truncate">
+                        {style === 'white' ? '相纸白' : '深黑'} · 宽度在右侧调
+                      </span>
+                    </span>
+                  </button>
+                ))}
+                <div className="micro" style={{ marginTop: 10, lineHeight: 1.6 }}>
+                  边框先在预览里叠加，导出接口已预留，后续接后端即可烘进成片。
+                </div>
+              </>
+            ) : null}
           </div>
         </aside>
 
-        <section className="grade-canvas">
-          {mediaSrc ? (
-            <img
-              src={mediaSrc}
-              alt={item.name}
+        <section className="grade-canvas" ref={canvasRef}>
+          {mediaSrc && preview ? (
+            <div
+              className="grade-stage"
               style={{
-                maxWidth: 'calc(100% - 110px)',
-                maxHeight: 'calc(100% - 100px)',
-                objectFit: 'contain',
-                boxShadow: '0 18px 46px rgba(0, 0, 0, 0.5)',
+                padding: `${framePadding}px`,
+                background: borderOn ? BORDER_COLORS[borderStyle] : 'transparent',
+                boxShadow: borderOn ? '0 18px 46px rgba(0, 0, 0, 0.5)' : 'none',
               }}
-              draggable={false}
-            />
+            >
+              <img
+                className="grade-image"
+                src={mediaSrc}
+                alt={item.name}
+                draggable={false}
+                style={{ width: preview.width * fitScale, height: preview.height * fitScale }}
+              />
+            </div>
           ) : (
             <div className="caption">{busy ? '正在生成调色预览…' : '暂无预览'}</div>
           )}
-          {busy ? <div className="canvas-progress">渲染中…</div> : null}
+          {busy ? <div className="canvas-progress">渲染调色</div> : null}
         </section>
 
         <aside className="grade-panel">
@@ -335,7 +421,7 @@ export function GradePage({
               onChange={setTab}
             />
           </div>
-          <div className="inspector-body">
+          <div className="inspector-body" ref={panelRef}>
             <Histogram src={mediaSrc} />
             {preview ? (
               <div className="analysis-line">
@@ -416,6 +502,32 @@ export function GradePage({
                 {slider('optics.grain_roughness', '颗粒粗糙度', 0, 100, 1)}
                 {slider('optics.chromatic_aberration', '色差', -100, 100, 1)}
               </Disclosure>
+              <Disclosure
+                title="边框"
+                open
+                onToggle={() => {
+                  // 边框常驻展开，样式在左侧栏选
+                }}
+              >
+                <SwitchRow
+                  label="启用边框"
+                  checked={borderOn}
+                  onChange={setBorderOn}
+                  hint="渲染边框：先叠在预览上，导出接口已预留"
+                />
+                <ValueRow
+                  label="边框宽度"
+                  value={borderWidth}
+                  min={0}
+                  max={12}
+                  step={0.5}
+                  decimals={1}
+                  suffix="%"
+                  disabled={!borderOn}
+                  onChange={setBorderWidth}
+                  onReset={() => setBorderWidth(0)}
+                />
+              </Disclosure>
             </div>
           </div>
         </aside>
@@ -431,7 +543,6 @@ export function GradePage({
               <FieldRow label="名称">
                 <input
                   className="input"
-                  style={{ width: '100%' }}
                   value={saveName}
                   autoFocus
                   onChange={(event) => setSaveName(event.target.value)}
