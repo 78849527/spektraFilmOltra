@@ -129,10 +129,11 @@ def output_to_display_rgb(image: np.ndarray, output_color_space: str) -> np.ndar
 
 
 def save_display_png(path: Path, rgb: np.ndarray) -> None:
+    """保存 8-bit 显示图；OIIO 的 PNG 分支要求 0–1 浮点，先归一化。"""
     path.parent.mkdir(parents=True, exist_ok=True)
     save_image_oiio(
         str(path),
-        np.asarray(rgb, dtype=np.uint8),
+        np.asarray(rgb, dtype=np.float32) / 255.0,
         bit_depth=8,
         color_space='sRGB',
         cctf_encoding=True,
