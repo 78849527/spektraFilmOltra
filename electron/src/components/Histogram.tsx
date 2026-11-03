@@ -12,7 +12,11 @@ export function Histogram({ src }: { src: string | null }) {
     image.crossOrigin = 'anonymous'
     image.onload = () => {
       if (!active) return
-      drawHistogram(image, canvasRef.current)
+      try {
+        drawHistogram(image, canvasRef.current)
+      } catch (error) {
+        window.spektra?.logError(`[histogram] ${String(error)}`)
+      }
     }
     image.src = src
     return () => {

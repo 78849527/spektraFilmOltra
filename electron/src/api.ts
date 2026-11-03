@@ -15,6 +15,7 @@ interface SpektraBridge {
   pickJson: () => Promise<string | null>
   pickSavePath: (defaultName: string, extension: string) => Promise<string | null>
   reveal: (filePath: string) => Promise<void>
+  logError: (message: string) => Promise<void>
 }
 
 declare global {

@@ -144,6 +144,7 @@ class GradeApi:
         return max(1, int(round(width * scale))), max(1, int(round(height * scale)))
 
     def submit_export(self, handoff_path: str, recipe: dict[str, Any], settings: dict[str, Any], name: str) -> Job:
+        self.queue.cancel_kind('grade_preview')
         return self.queue.submit(
             'grade_export',
             lambda job: self.run_export(job, handoff_path, recipe, settings, name),

@@ -240,14 +240,17 @@ export function Disclosure({
   const [height, setHeight] = useState<number | 'auto'>(open ? 'auto' : 0)
 
   useEffect(() => {
-    if (!bodyRef.current) return
-    const target = bodyRef.current.scrollHeight
-    setHeight(open ? target : 0)
+    const element = bodyRef.current
+    if (!element) return
     if (open) {
+      setHeight(element.scrollHeight)
       const timer = window.setTimeout(() => setHeight('auto'), 220)
       return () => window.clearTimeout(timer)
     }
-  }, [open, children])
+    setHeight(element.scrollHeight)
+    const frame = requestAnimationFrame(() => setHeight(0))
+    return () => cancelAnimationFrame(frame)
+  }, [open])
 
   return (
     <div className="disclosure">

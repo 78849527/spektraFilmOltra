@@ -16,6 +16,7 @@ const api = {
   pickSavePath: (defaultName: string, extension: string) =>
     ipcRenderer.invoke('dialog:save', { defaultName, extension }) as Promise<string | null>,
   reveal: (filePath: string) => ipcRenderer.invoke('shell:reveal', filePath) as Promise<void>,
+  logError: (message: string) => ipcRenderer.invoke('app:log-error', message) as Promise<void>,
 }
 
 contextBridge.exposeInMainWorld('spektra', api)

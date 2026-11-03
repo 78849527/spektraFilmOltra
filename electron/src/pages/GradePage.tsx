@@ -60,7 +60,7 @@ export function GradePage({
   onBack: () => void
   onNotify: (message: string, error?: boolean) => void
 }) {
-  const [recipe, setRecipe] = useState<Recipe>(() => bootstrap.grade_recipe)
+  const [recipe, setRecipe] = useState<Recipe>(() => bootstrap.grade_recipe ?? ({} as Recipe))
   const [tab, setTab] = useState<'light' | 'color'>('light')
   const [preview, setPreview] = useState<GradePreview | null>(null)
   const [busy, setBusy] = useState(false)
@@ -125,6 +125,7 @@ export function GradePage({
   }
 
   function applyPreset(preset: PresetEntry) {
+    if (!preset.recipe) return
     setRecipe(preset.recipe)
     setActivePreset(preset.id)
   }
@@ -255,7 +256,7 @@ export function GradePage({
             {railTab === 'lut' ? (
               <>
                 <button
-                  className={`lut-row${recipe.lut.path === '' ? ' active' : ''}`}
+                  className={`lut-row${(recipe.lut?.path ?? '') === '' ? ' active' : ''}`}
                   onClick={() => update('lut.path', '')}
                 >
                   无 LUT
@@ -263,7 +264,7 @@ export function GradePage({
                 {luts.map((lut) => (
                   <button
                     key={lut.path}
-                    className={`lut-row${recipe.lut.path === lut.path ? ' active' : ''}`}
+                    className={`lut-row${recipe.lut?.path === lut.path ? ' active' : ''}`}
                     onClick={() => update('lut.path', lut.path)}
                   >
                     <Icon name="sliders" size={12} />
@@ -337,7 +338,7 @@ export function GradePage({
           </div>
           <div className="inspector-body">
             <Histogram src={mediaSrc} />
-            {preview ? (
+            {preview?.analysis ? (
               <div className="analysis-line">
                 <span className="truncate">黑场 {preview.analysis.black_point.toFixed(2)}</span>
                 <span className="truncate">白场 {preview.analysis.white_point.toFixed(2)}</span>

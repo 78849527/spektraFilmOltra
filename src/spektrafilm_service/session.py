@@ -215,7 +215,12 @@ class ServiceSession:
         return hashlib.sha1(encoded.encode('utf-8')).hexdigest()
 
     def submit_preview(self, scale: float) -> Job:
-        return self.queue.submit('preview', lambda job: self.run_preview(scale, job), supersede_kind='preview')
+        return self.queue.submit(
+            'preview',
+            lambda job: self.run_preview(scale, job),
+            supersede_kind='preview',
+            initial_label='切换中…',
+        )
 
     def run_preview(self, scale: float, job: Job) -> dict[str, Any]:
         photo = self.state.photo
@@ -320,6 +325,8 @@ class ServiceSession:
 
     # ── 导出 ────────────────────────────────────────────────
     def submit_export(self, settings: dict[str, Any] | None) -> Job:
+        # 全尺寸导出优先：先把预览让出来，避免在 11 秒的显影阶段后面干等。
+        self.queue.cancel_kind('preview')
         return self.queue.submit('export', lambda job: self.run_export(job, ExportSettings.from_dict(settings)))
 
     def run_export(self, job: Job, settings: ExportSettings) -> dict[str, Any]:
@@ -355,6 +362,7 @@ class ServiceSession:
 
     # ── 交接图 ──────────────────────────────────────────────
     def submit_handoff(self) -> Job:
+        self.queue.cancel_kind('preview')
         return self.queue.submit('handoff', lambda job: self.run_handoff(job))
 
     def run_handoff(self, job: Job) -> dict[str, Any]:

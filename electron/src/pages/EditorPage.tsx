@@ -73,6 +73,9 @@ export function EditorPage({
   const readyRef = useRef(false)
   const submittedKeyRef = useRef('')
   const renderSeqRef = useRef(0)
+  const renderChainRef = useRef<Promise<void>>(Promise.resolve())
+  const refineTimerRef = useRef<number | null>(null)
+  const photoRef = useRef<OpenedPhoto | null>(null)
   const commitChainRef = useRef<Promise<void>>(Promise.resolve())
   const canvasRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null)
@@ -80,33 +83,63 @@ export function EditorPage({
 
   stateRef.current = state
   scaleRef.current = scale
+  photoRef.current = photo
 
   const selection = selectionOf(state)
 
-  const startRender = useCallback(
-    async (scaleValue: number) => {
-      const seq = ++renderSeqRef.current
-      setBusy(true)
-      setProgress(null)
-      try {
-        const { job_id } = await request<{ job_id: string }>('POST', '/v1/preview', { scale: scaleValue })
-        const job = await waitForJob(job_id, (status) => {
-          if (seq === renderSeqRef.current) setProgress(status.progress)
-        })
-        if (seq !== renderSeqRef.current) return
-        const result = job.result as unknown as { image_path: string; width: number; height: number }
-        setPreview({ path: result.image_path, width: result.width, height: result.height })
+  const scheduleRefineRef = useRef<() => void>(() => undefined)
+
+  const submitPreview = useCallback(
+    (scaleValue: number, refineAfter = false) => {
+      renderChainRef.current = renderChainRef.current.then(async () => {
+        const seq = ++renderSeqRef.current
+        setBusy(true)
         setProgress(null)
-      } catch (error) {
-        if (seq !== renderSeqRef.current) return
-        const message = errorMessage(error)
-        if (!message.includes('取消')) onNotify(message, true)
-      } finally {
-        if (seq === renderSeqRef.current) setBusy(false)
-      }
+        try {
+          const { job_id } = await request<{ job_id: string }>('POST', '/v1/preview', {
+            scale: scaleValue,
+          })
+          void (async () => {
+            try {
+              const job = await waitForJob(job_id, (status) => {
+                if (seq === renderSeqRef.current) setProgress(status.progress)
+              })
+              if (seq !== renderSeqRef.current) return
+              const result = job.result as unknown as { image_path: string; width: number; height: number }
+              setPreview({ path: result.image_path, width: result.width, height: result.height })
+              setProgress(null)
+              if (refineAfter && scaleValue < scaleRef.current - 1e-6) {
+                scheduleRefineRef.current()
+              }
+            } catch (error) {
+              if (seq !== renderSeqRef.current) return
+              const message = errorMessage(error)
+              if (!message.includes('取消')) onNotify(message, true)
+            } finally {
+              if (seq === renderSeqRef.current) setBusy(false)
+            }
+          })()
+        } catch (error) {
+          if (seq === renderSeqRef.current) {
+            setBusy(false)
+            onNotify(errorMessage(error), true)
+          }
+        }
+      })
+      return renderChainRef.current
     },
     [onNotify],
   )
+
+  const scheduleRefine = useCallback(() => {
+    if (refineTimerRef.current) window.clearTimeout(refineTimerRef.current)
+    refineTimerRef.current = window.setTimeout(() => {
+      refineTimerRef.current = null
+      void submitPreview(scaleRef.current)
+    }, 1200)
+  }, [submitPreview])
+
+  scheduleRefineRef.current = scheduleRefine
 
   useEffect(() => {
     let active = true
@@ -125,13 +158,14 @@ export function EditorPage({
         setQuick(pickQuick(await request<QuickPayload>('GET', '/v1/quick')))
         readyRef.current = true
         submittedKeyRef.current = JSON.stringify(opened.state)
-        await startRender(scaleRef.current)
+        void submitPreview(scaleRef.current)
       } catch (error) {
         if (active) onNotify(errorMessage(error), true)
       }
     })()
     return () => {
       active = false
+      if (refineTimerRef.current) window.clearTimeout(refineTimerRef.current)
     }
   }, [item.id, item.path])
 
@@ -170,8 +204,13 @@ export function EditorPage({
           const autoPreview = Boolean(readPath(response.state, 'simulation.auto_preview'))
           if (autoPreview && key !== submittedKeyRef.current) {
             submittedKeyRef.current = key
-            // 不阻塞下一次提交：旧显影会被新请求取消。
-            void startRender(scaleRef.current)
+            // 交互期先出 640px 的快图，快图完成且停手后再补全分辨率。
+            const longEdge = photoRef.current
+              ? Math.max(photoRef.current.width, photoRef.current.height)
+              : 0
+            const fastScale =
+              longEdge > 0 ? Math.min(scaleRef.current, 640 / longEdge) : scaleRef.current
+            void submitPreview(fastScale, true)
           }
         } catch (error) {
           onNotify(errorMessage(error), true)
@@ -180,7 +219,7 @@ export function EditorPage({
       commitChainRef.current = commitChainRef.current.then(run, run)
       return commitChainRef.current
     },
-    [onNotify, saveItem, startRender],
+    [onNotify, saveItem, scheduleRefine, submitPreview],
   )
 
   useEffect(() => {
@@ -215,7 +254,8 @@ export function EditorPage({
   function changeScale(next: number) {
     setScale(next)
     setOffset({ x: 0, y: 0 })
-    void startRender(next)
+    if (refineTimerRef.current) window.clearTimeout(refineTimerRef.current)
+    void submitPreview(next)
   }
 
   function quickLocal(axis: string, value: number) {
@@ -266,6 +306,7 @@ export function EditorPage({
 
   async function openGrade() {
     try {
+      if (refineTimerRef.current) window.clearTimeout(refineTimerRef.current)
       await commitChainRef.current
       await request('POST', '/v1/state', { state: stateRef.current })
       await saveItem(stateRef.current)
@@ -284,6 +325,7 @@ export function EditorPage({
     setExportOpen(false)
     setExporting(true)
     try {
+      if (refineTimerRef.current) window.clearTimeout(refineTimerRef.current)
       await commitChainRef.current
       await request('POST', '/v1/state', { state: stateRef.current })
       const { job_id } = await request<{ job_id: string }>('POST', '/v1/export', { settings })
@@ -301,6 +343,7 @@ export function EditorPage({
 
   async function switchPhoto(next: ItemRecord) {
     try {
+      if (refineTimerRef.current) window.clearTimeout(refineTimerRef.current)
       await commitChainRef.current
       await request('POST', '/v1/state', { state: stateRef.current })
       await saveItem(stateRef.current)
@@ -312,6 +355,7 @@ export function EditorPage({
 
   async function leaveToLibrary() {
     try {
+      if (refineTimerRef.current) window.clearTimeout(refineTimerRef.current)
       await commitChainRef.current
       await request('POST', '/v1/state', { state: stateRef.current })
       await saveItem(stateRef.current)
@@ -547,14 +591,18 @@ export function EditorPage({
             {progress ? (
               <div className="canvas-progress">
                 <span>{progress.label}</span>
-                <div className="progress-track">
+                <div className={`progress-track${progress.index === 0 ? ' indeterminate' : ''}`}>
                   <div
                     className="progress-fill"
-                    style={{ width: `${progress.total ? (progress.index / progress.total) * 100 : 0}%` }}
+                    style={{
+                      width: progress.index === 0
+                        ? '38%'
+                        : `${progress.total ? (progress.index / progress.total) * 100 : 0}%`,
+                    }}
                   />
                 </div>
                 <span className="num">
-                  {progress.index}/{progress.total}
+                  {progress.index === 0 ? '…' : `${progress.index}/${progress.total}`}
                 </span>
               </div>
             ) : null}
@@ -569,7 +617,13 @@ export function EditorPage({
                 <Icon name="compare" size={12} />
                 对比
               </button>
-              <button className="toolbar-text" onClick={() => void startRender(scale)}>
+              <button
+                className="toolbar-text"
+                onClick={() => {
+                  if (refineTimerRef.current) window.clearTimeout(refineTimerRef.current)
+                  void submitPreview(scale)
+                }}
+              >
                 渲染
               </button>
               <span className="v-hairline" style={{ height: 14, alignSelf: 'center' }} />
