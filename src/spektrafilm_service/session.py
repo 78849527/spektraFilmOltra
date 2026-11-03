@@ -284,7 +284,11 @@ class ServiceSession:
                 self.state.simulator = Simulator(digested)
             else:
                 self.state.simulator.update_params(digested)
-            output = self.state.simulator.process(image, progress_callback=progress)
+            output = self.state.simulator.process(
+                image,
+                progress_callback=progress,
+                cancel_callback=lambda: self.queue.is_cancelled(job),
+            )
             elapsed_ms = int(round(self.state.simulator.get_total_elapsed_time() * 1000))
             timings = dict(self.state.simulator.get_timings())
         return np.asarray(output), output_color_space, cctf_encoding, elapsed_ms, timings

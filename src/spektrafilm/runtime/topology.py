@@ -9,6 +9,10 @@ from time import perf_counter
 from typing import Any, Callable
 
 
+class PipelineCancelled(Exception):
+    """Raised when the caller asks the dispatcher to stop between nodes."""
+
+
 class Tap:
     """Canonical tap names for the spektrafilm pipeline.
 
@@ -63,6 +67,7 @@ def run_topology(
     image: Any,
     *,
     on_fire: Callable[[Node, float], None] | None = None,
+    cancel: Callable[[], bool] | None = None,
 ) -> Any:
     """Walk ``topology`` in declared order, firing every node whose reads
     are satisfied. Stops as soon as ``collect`` is in state and returns it.
@@ -73,6 +78,8 @@ def run_topology(
     """
     state: dict[str, Any] = {inject: image}
     for node in topology:
+        if cancel is not None and cancel():
+            raise PipelineCancelled()
         if all(k in state for k in node.reads):
             t0 = perf_counter()
             node.fire(state)

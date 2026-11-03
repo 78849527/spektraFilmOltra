@@ -71,7 +71,9 @@ export function EditorPage({
   const stateRef = useRef(state)
   const scaleRef = useRef(scale)
   const readyRef = useRef(false)
-  const renderedKeyRef = useRef('')
+  const submittedKeyRef = useRef('')
+  const renderSeqRef = useRef(0)
+  const commitChainRef = useRef<Promise<void>>(Promise.resolve())
   const canvasRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null)
   const quickTimerRef = useRef<number | null>(null)
@@ -81,20 +83,26 @@ export function EditorPage({
 
   const selection = selectionOf(state)
 
-  const renderPreview = useCallback(
+  const startRender = useCallback(
     async (scaleValue: number) => {
+      const seq = ++renderSeqRef.current
       setBusy(true)
+      setProgress(null)
       try {
         const { job_id } = await request<{ job_id: string }>('POST', '/v1/preview', { scale: scaleValue })
-        const job = await waitForJob(job_id, (status) => setProgress(status.progress))
+        const job = await waitForJob(job_id, (status) => {
+          if (seq === renderSeqRef.current) setProgress(status.progress)
+        })
+        if (seq !== renderSeqRef.current) return
         const result = job.result as unknown as { image_path: string; width: number; height: number }
         setPreview({ path: result.image_path, width: result.width, height: result.height })
         setProgress(null)
       } catch (error) {
+        if (seq !== renderSeqRef.current) return
         const message = errorMessage(error)
         if (!message.includes('取消')) onNotify(message, true)
       } finally {
-        setBusy(false)
+        if (seq === renderSeqRef.current) setBusy(false)
       }
     },
     [onNotify],
@@ -116,8 +124,8 @@ export function EditorPage({
         setState(opened.state)
         setQuick(pickQuick(await request<QuickPayload>('GET', '/v1/quick')))
         readyRef.current = true
-        renderedKeyRef.current = JSON.stringify(opened.state)
-        await renderPreview(scaleRef.current)
+        submittedKeyRef.current = JSON.stringify(opened.state)
+        await startRender(scaleRef.current)
       } catch (error) {
         if (active) onNotify(errorMessage(error), true)
       }
@@ -144,34 +152,42 @@ export function EditorPage({
     [item.id],
   )
 
-  const commitAndRender = useCallback(async () => {
-    try {
-      const snapshot = stateRef.current
-      const key = JSON.stringify(snapshot)
-      const response = await request<{ state: StateTree } & QuickPayload>('POST', '/v1/state', {
-        state: snapshot,
-      })
-      setQuick(pickQuick(response))
-      await saveItem(response.state)
-      if (JSON.stringify(response.state) !== key) {
-        // 换胶片/相纸后后端会重捕基线，等新状态回流再渲染，避免重复出图。
-        setState(response.state)
-        return
+  const commitAndRender = useCallback(
+    (snapshot: StateTree) => {
+      const run = async () => {
+        try {
+          const key = JSON.stringify(snapshot)
+          const response = await request<{ state: StateTree } & QuickPayload>('POST', '/v1/state', {
+            state: snapshot,
+          })
+          setQuick(pickQuick(response))
+          await saveItem(response.state)
+          if (JSON.stringify(response.state) !== key) {
+            // 换胶片/相纸后后端会重捕基线，等新状态回流再渲染，避免重复出图。
+            setState(response.state)
+            return
+          }
+          const autoPreview = Boolean(readPath(response.state, 'simulation.auto_preview'))
+          if (autoPreview && key !== submittedKeyRef.current) {
+            submittedKeyRef.current = key
+            // 不阻塞下一次提交：旧显影会被新请求取消。
+            void startRender(scaleRef.current)
+          }
+        } catch (error) {
+          onNotify(errorMessage(error), true)
+        }
       }
-      const autoPreview = Boolean(readPath(response.state, 'simulation.auto_preview'))
-      if (autoPreview && key !== renderedKeyRef.current) {
-        await renderPreview(scaleRef.current)
-        renderedKeyRef.current = key
-      }
-    } catch (error) {
-      onNotify(errorMessage(error), true)
-    }
-  }, [onNotify, renderPreview, saveItem])
+      commitChainRef.current = commitChainRef.current.then(run, run)
+      return commitChainRef.current
+    },
+    [onNotify, saveItem, startRender],
+  )
 
   useEffect(() => {
     if (!readyRef.current) return
+    const snapshot = state
     const timer = window.setTimeout(() => {
-      void commitAndRender()
+      void commitAndRender(snapshot)
     }, 320)
     return () => window.clearTimeout(timer)
   }, [state, commitAndRender])
@@ -199,7 +215,7 @@ export function EditorPage({
   function changeScale(next: number) {
     setScale(next)
     setOffset({ x: 0, y: 0 })
-    void renderPreview(next)
+    void startRender(next)
   }
 
   function quickLocal(axis: string, value: number) {
@@ -250,6 +266,7 @@ export function EditorPage({
 
   async function openGrade() {
     try {
+      await commitChainRef.current
       await request('POST', '/v1/state', { state: stateRef.current })
       await saveItem(stateRef.current)
       const { job_id } = await request<{ job_id: string }>('POST', '/v1/handoff', {})
@@ -267,6 +284,7 @@ export function EditorPage({
     setExportOpen(false)
     setExporting(true)
     try {
+      await commitChainRef.current
       await request('POST', '/v1/state', { state: stateRef.current })
       const { job_id } = await request<{ job_id: string }>('POST', '/v1/export', { settings })
       const job = await waitForJob(job_id, (status) => setProgress(status.progress))
@@ -283,6 +301,7 @@ export function EditorPage({
 
   async function switchPhoto(next: ItemRecord) {
     try {
+      await commitChainRef.current
       await request('POST', '/v1/state', { state: stateRef.current })
       await saveItem(stateRef.current)
     } catch {
@@ -293,6 +312,7 @@ export function EditorPage({
 
   async function leaveToLibrary() {
     try {
+      await commitChainRef.current
       await request('POST', '/v1/state', { state: stateRef.current })
       await saveItem(stateRef.current)
     } catch {
@@ -549,7 +569,7 @@ export function EditorPage({
                 <Icon name="compare" size={12} />
                 对比
               </button>
-              <button className="toolbar-text" onClick={() => void renderPreview(scale)}>
+              <button className="toolbar-text" onClick={() => void startRender(scale)}>
                 渲染
               </button>
               <span className="v-hairline" style={{ height: 14, alignSelf: 'center' }} />

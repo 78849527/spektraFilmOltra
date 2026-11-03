@@ -100,7 +100,8 @@ class SimulationPipeline:
         self._progress_callback = None
         self._progress_index = 0
 
-    def process(self, image, *, inject: str | None = None, collect: str | None = None, progress_callback=None):
+    def process(self, image, *, inject: str | None = None, collect: str | None = None,
+                progress_callback=None, cancel_callback=None):
         """Run the pipeline.
 
         Defaults run end-to-end (``rgb_in`` → ``rgb_out``). Pass
@@ -117,16 +118,19 @@ class SimulationPipeline:
 
         self.timings.clear()
         self._progress_callback = progress_callback
+        self._cancel_callback = cancel_callback
         self._progress_index = 0
         start = perf_counter()
         try:
             return run_topology(
                 self._topology, inject, collect, image,
                 on_fire=self._record_node_timing,
+                cancel=cancel_callback,
             )
         finally:
             self._last_elapsed_time = perf_counter() - start
             self._progress_callback = None
+            self._cancel_callback = None
 
     def get_timings(self):
         return self.timings

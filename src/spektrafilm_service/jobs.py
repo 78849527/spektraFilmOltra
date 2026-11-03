@@ -45,6 +45,7 @@ class JobQueue:
         self._lock = threading.Lock()
         self._jobs: OrderedDict[str, Job] = OrderedDict()
         self._queue: deque[tuple[Job, Callable[[Job], dict[str, object] | None]]] = deque()
+        self._running: dict[str, Job] = {}
         self._worker = threading.Thread(target=self._run, name='spektrafilm-worker', daemon=True)
         self._seq = itertools.count(1)
         self._wake = threading.Condition(self._lock)
@@ -65,6 +66,10 @@ class JobQueue:
                         queued_job.state = 'cancelled'
                         queued_job.cancelled = True
                 self._queue = deque(item for item in self._queue if not item[0].cancelled)
+                # 正在跑的同类型任务也要停：管线在节点之间检查取消标记。
+                for running_job in self._running.values():
+                    if running_job.kind == supersede_kind:
+                        running_job.cancelled = True
             self._jobs[job.id] = job
             self._prune()
             self._queue.append((job, run))
@@ -132,12 +137,16 @@ class JobQueue:
                 if job.cancelled:
                     continue
                 job.state = 'running'
+                self._running[job.id] = job
             try:
                 result = run(job)
             except Exception as exc:  # noqa: BLE001 - 作业失败要回报给前端
                 self.finish(job, None, f'{type(exc).__name__}: {exc}')
             else:
                 self.finish(job, result, None)
+            finally:
+                with self._lock:
+                    self._running.pop(job.id, None)
 
 
 __all__ = ['Job', 'JobCancelled', 'JobQueue']

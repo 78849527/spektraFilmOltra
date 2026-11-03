@@ -50,9 +50,51 @@ def test_job_queue_supersedes_queued_preview() -> None:
     _wait(queue, second.id)
     _wait(queue, third.id)
 
-    assert first.state == 'done'
+    # 新的预览会连正在跑的旧预览一起作废，只保留最后一组参数。
+    assert first.state == 'cancelled'
     assert second.state == 'cancelled'
     assert third.state == 'done'
+
+
+def test_supersede_cancels_running_preview() -> None:
+    queue = JobQueue()
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow(_job) -> dict:
+        started.set()
+        release.wait(2.0)
+        return {'ok': True}
+
+    first = queue.submit('preview', slow)
+    assert started.wait(5.0)
+    queue.submit('preview', lambda job: {'ok': True}, supersede_kind='preview')
+    assert queue.is_cancelled(first)
+    release.set()
+    _wait(queue, first.id)
+    assert first.state == 'cancelled'
+
+
+def test_pipeline_cancels_between_nodes() -> None:
+    from spektrafilm.runtime.topology import PipelineCancelled, run_topology, Node
+
+    fired: list[str] = []
+
+    def first(_image: object) -> object:
+        fired.append('first')
+        return 1
+
+    def second(value: object) -> object:
+        fired.append('second')
+        return value
+
+    topology = [
+        Node(('in',), ('a',), first, 'first'),
+        Node(('a',), ('out',), second, 'second'),
+    ]
+    with pytest.raises(PipelineCancelled):
+        run_topology(topology, 'in', 'out', 0, cancel=lambda: True)
+    assert fired == []
 
 
 def test_export_is_not_cancelled_by_new_preview() -> None:
