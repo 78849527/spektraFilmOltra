@@ -60,6 +60,7 @@ class PhotoSession:
     original_preview_path: Path
     display_preview_path: Path
     last_full_render: FullRender | None = None
+    preview_cache: dict[int, np.ndarray] = field(default_factory=dict)
 
 
 @dataclass
@@ -232,7 +233,12 @@ class ServiceSession:
             return self._preview_payload(cached)
 
         self.queue.update_progress(job, '准备预览', 0, 1)
-        source = develop.preview_source(np.double(photo.image), scale)
+        long_edge = max(int(photo.image.shape[0]), int(photo.image.shape[1]))
+        target_edge = min(max(1, int(round(long_edge * float(scale)))), develop.PREVIEW_MAX_EDGE)
+        source = photo.preview_cache.get(target_edge)
+        if source is None:
+            source = develop.preview_source(np.double(photo.image), scale)
+            photo.preview_cache[target_edge] = source
         output, output_color_space, _, elapsed_ms, timings = self._simulate(source, job)
         if self.queue.is_cancelled(job):
             raise JobCancelled('预览已被更新的请求取代')
