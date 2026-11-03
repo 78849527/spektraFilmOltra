@@ -74,8 +74,9 @@ export function EditorPage({
   const submittedKeyRef = useRef('')
   const renderSeqRef = useRef(0)
   const renderChainRef = useRef<Promise<void>>(Promise.resolve())
-  const refineTimerRef = useRef<number | null>(null)
-  const photoRef = useRef<OpenedPhoto | null>(null)
+  const pendingTimerRef = useRef<number | null>(null)
+  const renderInFlightRef = useRef(false)
+  const cancelSentRef = useRef(false)
   const commitChainRef = useRef<Promise<void>>(Promise.resolve())
   const canvasRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null)
@@ -83,16 +84,15 @@ export function EditorPage({
 
   stateRef.current = state
   scaleRef.current = scale
-  photoRef.current = photo
 
   const selection = selectionOf(state)
 
-  const scheduleRefineRef = useRef<() => void>(() => undefined)
-
   const submitPreview = useCallback(
-    (scaleValue: number, refineAfter = false) => {
+    (scaleValue: number) => {
       renderChainRef.current = renderChainRef.current.then(async () => {
         const seq = ++renderSeqRef.current
+        renderInFlightRef.current = true
+        cancelSentRef.current = false
         setBusy(true)
         setProgress(null)
         try {
@@ -108,15 +108,15 @@ export function EditorPage({
               const result = job.result as unknown as { image_path: string; width: number; height: number }
               setPreview({ path: result.image_path, width: result.width, height: result.height })
               setProgress(null)
-              if (refineAfter && scaleValue < scaleRef.current - 1e-6) {
-                scheduleRefineRef.current()
-              }
             } catch (error) {
               if (seq !== renderSeqRef.current) return
               const message = errorMessage(error)
               if (!message.includes('取消')) onNotify(message, true)
             } finally {
-              if (seq === renderSeqRef.current) setBusy(false)
+              if (seq === renderSeqRef.current) {
+                renderInFlightRef.current = false
+                setBusy(false)
+              }
             }
           })()
         } catch (error) {
@@ -130,16 +130,6 @@ export function EditorPage({
     },
     [onNotify],
   )
-
-  const scheduleRefine = useCallback(() => {
-    if (refineTimerRef.current) window.clearTimeout(refineTimerRef.current)
-    refineTimerRef.current = window.setTimeout(() => {
-      refineTimerRef.current = null
-      void submitPreview(scaleRef.current)
-    }, 1200)
-  }, [submitPreview])
-
-  scheduleRefineRef.current = scheduleRefine
 
   useEffect(() => {
     let active = true
@@ -159,13 +149,14 @@ export function EditorPage({
         readyRef.current = true
         submittedKeyRef.current = JSON.stringify(opened.state)
         void submitPreview(scaleRef.current)
+        setProgress(null)
       } catch (error) {
         if (active) onNotify(errorMessage(error), true)
       }
     })()
     return () => {
       active = false
-      if (refineTimerRef.current) window.clearTimeout(refineTimerRef.current)
+      if (pendingTimerRef.current) window.clearTimeout(pendingTimerRef.current)
     }
   }, [item.id, item.path])
 
@@ -187,7 +178,7 @@ export function EditorPage({
   )
 
   const commitAndRender = useCallback(
-    (snapshot: StateTree) => {
+    (snapshot: StateTree, options?: { force?: boolean; scale?: number }) => {
       const run = async () => {
         try {
           const key = JSON.stringify(snapshot)
@@ -197,38 +188,47 @@ export function EditorPage({
           setQuick(pickQuick(response))
           await saveItem(response.state)
           if (JSON.stringify(response.state) !== key) {
-            // 换胶片/相纸后后端会重捕基线，等新状态回流再渲染，避免重复出图。
+            // 换胶片/相纸后后端会重捕基线，等新状态回流再渲染。
             setState(response.state)
             return
           }
           const autoPreview = Boolean(readPath(response.state, 'simulation.auto_preview'))
-          if (autoPreview && key !== submittedKeyRef.current) {
+          if ((autoPreview && key !== submittedKeyRef.current) || options?.force) {
             submittedKeyRef.current = key
-            // 交互期先出 640px 的快图，快图完成且停手后再补全分辨率。
-            const longEdge = photoRef.current
-              ? Math.max(photoRef.current.width, photoRef.current.height)
-              : 0
-            const fastScale =
-              longEdge > 0 ? Math.min(scaleRef.current, 640 / longEdge) : scaleRef.current
-            void submitPreview(fastScale, true)
+            void submitPreview(options?.scale ?? scaleRef.current)
+          } else {
+            setProgress(null)
           }
         } catch (error) {
+          setProgress(null)
           onNotify(errorMessage(error), true)
         }
       }
       commitChainRef.current = commitChainRef.current.then(run, run)
       return commitChainRef.current
     },
-    [onNotify, saveItem, scheduleRefine, submitPreview],
+    [onNotify, saveItem, submitPreview],
   )
 
   useEffect(() => {
     if (!readyRef.current) return
+    if (JSON.stringify(state) === submittedKeyRef.current) return
     const snapshot = state
-    const timer = window.setTimeout(() => {
+    if (pendingTimerRef.current) window.clearTimeout(pendingTimerRef.current)
+    if (renderInFlightRef.current && !cancelSentRef.current) {
+      cancelSentRef.current = true
+      void request('POST', '/v1/preview/cancel', {}).catch(() => undefined)
+      setProgress({ label: '已中断，等待新参数…', index: 0, total: 1 })
+    } else if (!renderInFlightRef.current) {
+      setProgress({ label: '等待新参数…', index: 0, total: 1 })
+    }
+    pendingTimerRef.current = window.setTimeout(() => {
+      pendingTimerRef.current = null
       void commitAndRender(snapshot)
-    }, 320)
-    return () => window.clearTimeout(timer)
+    }, 1000)
+    return () => {
+      if (pendingTimerRef.current) window.clearTimeout(pendingTimerRef.current)
+    }
   }, [state, commitAndRender])
 
   function updatePath(path: string, value: unknown) {
@@ -254,8 +254,8 @@ export function EditorPage({
   function changeScale(next: number) {
     setScale(next)
     setOffset({ x: 0, y: 0 })
-    if (refineTimerRef.current) window.clearTimeout(refineTimerRef.current)
-    void submitPreview(next)
+    if (pendingTimerRef.current) window.clearTimeout(pendingTimerRef.current)
+    void commitAndRender(stateRef.current, { force: true, scale: next })
   }
 
   function quickLocal(axis: string, value: number) {
@@ -306,7 +306,7 @@ export function EditorPage({
 
   async function openGrade() {
     try {
-      if (refineTimerRef.current) window.clearTimeout(refineTimerRef.current)
+      if (pendingTimerRef.current) window.clearTimeout(pendingTimerRef.current)
       await commitChainRef.current
       await request('POST', '/v1/state', { state: stateRef.current })
       await saveItem(stateRef.current)
@@ -325,7 +325,7 @@ export function EditorPage({
     setExportOpen(false)
     setExporting(true)
     try {
-      if (refineTimerRef.current) window.clearTimeout(refineTimerRef.current)
+      if (pendingTimerRef.current) window.clearTimeout(pendingTimerRef.current)
       await commitChainRef.current
       await request('POST', '/v1/state', { state: stateRef.current })
       const { job_id } = await request<{ job_id: string }>('POST', '/v1/export', { settings })
@@ -343,7 +343,7 @@ export function EditorPage({
 
   async function switchPhoto(next: ItemRecord) {
     try {
-      if (refineTimerRef.current) window.clearTimeout(refineTimerRef.current)
+      if (pendingTimerRef.current) window.clearTimeout(pendingTimerRef.current)
       await commitChainRef.current
       await request('POST', '/v1/state', { state: stateRef.current })
       await saveItem(stateRef.current)
@@ -355,7 +355,7 @@ export function EditorPage({
 
   async function leaveToLibrary() {
     try {
-      if (refineTimerRef.current) window.clearTimeout(refineTimerRef.current)
+      if (pendingTimerRef.current) window.clearTimeout(pendingTimerRef.current)
       await commitChainRef.current
       await request('POST', '/v1/state', { state: stateRef.current })
       await saveItem(stateRef.current)
@@ -608,10 +608,16 @@ export function EditorPage({
             ) : null}
 
             <div className="canvas-toolbar">
-              <button className="toolbar-text" onClick={() => changeScale(scale === 0.5 ? 1.0 : 0.5)}>
-                {scale === 0.5 ? '1/2' : '1/1'}
-                <Icon name="chevronDown" size={9} />
-              </button>
+              <select
+                className="select"
+                style={{ height: 24, fontSize: 10.5 }}
+                value={scale}
+                onChange={(event) => changeScale(Number(event.target.value))}
+              >
+                <option value={0.25}>1/4</option>
+                <option value={0.5}>1/2</option>
+                <option value={1}>1/1</option>
+              </select>
               <span className="v-hairline" style={{ height: 14, alignSelf: 'center' }} />
               <button className={`toolbar-text${compare ? ' active' : ''}`} onClick={() => setCompare(!compare)}>
                 <Icon name="compare" size={12} />
@@ -620,8 +626,8 @@ export function EditorPage({
               <button
                 className="toolbar-text"
                 onClick={() => {
-                  if (refineTimerRef.current) window.clearTimeout(refineTimerRef.current)
-                  void submitPreview(scale)
+                  if (pendingTimerRef.current) window.clearTimeout(pendingTimerRef.current)
+                  void commitAndRender(stateRef.current, { force: true, scale })
                 }}
               >
                 渲染

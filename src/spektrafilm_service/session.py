@@ -215,6 +215,9 @@ class ServiceSession:
         encoded = json.dumps(payload, sort_keys=True, default=str)
         return hashlib.sha1(encoded.encode('utf-8')).hexdigest()
 
+    def cancel_preview(self) -> None:
+        self.queue.cancel_kind('preview')
+
     def submit_preview(self, scale: float) -> Job:
         return self.queue.submit(
             'preview',

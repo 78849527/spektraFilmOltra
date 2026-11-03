@@ -70,6 +70,10 @@ class Api:
             job = self.session.submit_preview(scale)
             return 200, {'job_id': job.id}
 
+        if method == 'POST' and path == '/v1/preview/cancel':
+            self.session.cancel_preview()
+            return 200, {'ok': True}
+
         if method == 'POST' and path == '/v1/export':
             job = self.session.submit_export(body.get('settings'))
             return 200, {'job_id': job.id}
