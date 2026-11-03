@@ -182,11 +182,22 @@ enum SpectralUpsampling {
     }
 
     static func rgbToTCB(_ rgb: Vec3, colorSpace: String, applyCCTFDecoding: Bool,
-                         referenceIlluminant: String) -> (tc: (Double, Double), b: Double) {
-        let illuXY = (try? Illuminants.xy(referenceIlluminant)) ?? (0.3127, 0.3290)
-        let xyz = ColorMath.rgbToXYZ(
-            rgb, spaceName: colorSpace, illuminantXY: illuXY,
-            applyCCTFDecoding: applyCCTFDecoding, adaptation: ColorMath.cat16
+                         referenceIlluminant: String,
+                         illuminantXY: (Double, Double)? = nil,
+                         toXYZMatrix: Mat3? = nil) -> (tc: (Double, Double), b: Double) {
+        let illuXY = illuminantXY ?? ((try? Illuminants.xy(referenceIlluminant)) ?? (0.3127, 0.3290))
+        var working = rgb
+        if applyCCTFDecoding {
+            let kind = ColorMath.cctfKind(for: colorSpace)
+            working = Vec3(
+                ColorMath.cctfDecode(working.x, kind: kind),
+                ColorMath.cctfDecode(working.y, kind: kind),
+                ColorMath.cctfDecode(working.z, kind: kind)
+            )
+        }
+        let xyz = toXYZMatrix?.apply(working) ?? ColorMath.rgbToXYZ(
+            working, spaceName: colorSpace, illuminantXY: illuXY,
+            applyCCTFDecoding: false, adaptation: ColorMath.cat16
         )
         let bRaw = xyz.x + xyz.y + xyz.z
         let b = bRaw.isFinite ? bRaw : 0
@@ -262,10 +273,14 @@ enum SpectralUpsampling {
 
     static func rgbToRawHanatos(_ rgb: Vec3, sensitivity: [[Double]], colorSpace: String,
                                  applyCCTFDecoding: Bool, referenceIlluminant: String,
-                                 tcLUT: SpectralLUT) -> Vec3 {
+                                 tcLUT: SpectralLUT,
+                                 illuminantXY: (Double, Double)? = nil,
+                                 toXYZMatrix: Mat3? = nil) -> Vec3 {
         let (tc, b) = rgbToTCB(rgb, colorSpace: colorSpace,
                               applyCCTFDecoding: applyCCTFDecoding,
-                              referenceIlluminant: referenceIlluminant)
+                              referenceIlluminant: referenceIlluminant,
+                              illuminantXY: illuminantXY,
+                              toXYZMatrix: toXYZMatrix)
         let scale = Double(tcLUT.size - 1)
         let raw = sample2D(tcLUT, x: tc.0 * scale, y: tc.1 * scale)
         return raw * b

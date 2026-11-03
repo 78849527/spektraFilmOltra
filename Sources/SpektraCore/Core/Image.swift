@@ -48,6 +48,16 @@ struct ImageRGB {
         }
         return output
     }
+
+    /// 把 NaN / ±Inf 归零。RAW 极端高光或零密度会在幂运算里产生非有限值，
+    /// 后续色域压缩的查表索引不能承受这些值。
+    func sanitizedNonFinite() -> ImageRGB {
+        var output = self
+        for i in 0..<output.data.count {
+            if !output.data[i].isFinite { output.data[i] = 0 }
+        }
+        return output
+    }
 }
 
 enum ImageMath {

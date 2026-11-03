@@ -10,6 +10,7 @@ final class PrintingStage {
     private let lutService: SpectralLUTService
     private let enlargerService: EnlargerService
     private let colorReference: ColorReferenceService
+    var pixelSizeUM: Double = 1.0
 
     init(film: Profile, filmRender: FilmRenderParams, printProfile: Profile, printRender: PrintRenderParams,
          enlarger: EnlargerParams, settings: SettingsParams, lutService: SpectralLUTService,
@@ -44,7 +45,7 @@ final class PrintingStage {
         raw = raw.map { $0 * exposure }
         let correction = colorReference.blackWhitePrintingExposureCorrection()
         raw = raw.map { $0 * correction }
-        raw = applyDiffusion(raw, params: enlarger.diffusionFilter, pixelSizeUM: nil)
+        raw = applyDiffusion(raw, params: enlarger.diffusionFilter, pixelSizeUM: pixelSizeUM)
         return raw.map { Vec3(ImageMath.log10Safe($0.x), ImageMath.log10Safe($0.y), ImageMath.log10Safe($0.z)) }
     }
 
@@ -161,8 +162,8 @@ final class PrintingStage {
         return value.isFinite ? value : 0
     }
 
-    private func applyDiffusion(_ image: ImageRGB, params: DiffusionFilterParams, pixelSizeUM: Double?) -> ImageRGB {
-        SpatialEffects.diffusionFilter(image, params: params, pixelSizeUM: pixelSizeUM ?? 1)
+    private func applyDiffusion(_ image: ImageRGB, params: DiffusionFilterParams, pixelSizeUM: Double) -> ImageRGB {
+        SpatialEffects.diffusionFilter(image, params: params, pixelSizeUM: pixelSizeUM)
     }
 }
 

@@ -2,13 +2,15 @@ import SwiftUI
 
 struct ProPanel: View {
     let pages: [ParamPage]
+    let actions: SkinActions
 
     @State private var page = 0
     @State private var values: [String: Double]
     @State private var toggles: [String: Bool]
 
-    init(pages: [ParamPage]) {
+    init(pages: [ParamPage], actions: SkinActions = .preview) {
         self.pages = pages
+        self.actions = actions
         var sliderValues: [String: Double] = [:]
         var toggleValues: [String: Bool] = [:]
         for page in pages {
@@ -86,14 +88,20 @@ struct ProPanel: View {
     private func sliderBinding(for row: ParamRow) -> Binding<Double> {
         Binding(
             get: { values[row.id] ?? fallbackValue(for: row) },
-            set: { values[row.id] = $0 }
+            set: { newValue in
+                values[row.id] = newValue
+                actions.proChanged(row.id, newValue)
+            }
         )
     }
 
     private func toggleBinding(for row: ParamRow) -> Binding<Bool> {
         Binding(
             get: { toggles[row.id] ?? fallbackToggle(for: row) },
-            set: { toggles[row.id] = $0 }
+            set: { newValue in
+                toggles[row.id] = newValue
+                actions.proToggled(row.id, newValue)
+            }
         )
     }
 

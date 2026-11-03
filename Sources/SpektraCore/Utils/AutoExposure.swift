@@ -117,21 +117,73 @@ enum AutoExposure {
 }
 
 enum Resize {
+    /// 对齐 skimage `rescale(..., order=0)`：输出尺寸 `round(scale*dim)`，
+    /// 采样坐标 `(i+0.5)*(in/out)-0.5`，最近邻 + 镜像边界。
     static func smallPreview(_ image: ImageRGB, maxSize: Int = 256) -> ImageRGB {
         let longEdge = max(image.width, image.height)
         guard longEdge > maxSize else { return image }
         let scale = Double(maxSize) / Double(longEdge)
-        let width = max(1, Int(round(Double(image.width) * scale)))
-        let height = max(1, Int(round(Double(image.height) * scale)))
+        let width = max(Int((Double(image.width) * scale).rounded(.toNearestOrEven)), 1)
+        let height = max(Int((Double(image.height) * scale).rounded(.toNearestOrEven)), 1)
+        guard width != image.width || height != image.height else { return image }
         var output = ImageRGB(width: width, height: height)
+        let stepX = Double(image.width) / Double(width)
+        let stepY = Double(image.height) / Double(height)
         for y in 0..<height {
-            let sourceY = min(image.height - 1, Int(Double(y) / scale))
+            let sourceY = (Double(y) + 0.5) * stepY - 0.5
+            let indexY = FastGaussian.reflect(Int(floor(sourceY + 0.5)), image.height)
             for x in 0..<width {
-                let sourceX = min(image.width - 1, Int(Double(x) / scale))
-                output.setPixel(x, y, image.pixel(sourceX, sourceY))
+                let sourceX = (Double(x) + 0.5) * stepX - 0.5
+                let indexX = FastGaussian.reflect(Int(floor(sourceX + 0.5)), image.width)
+                output.setPixel(x, y, image.pixel(indexX, indexY))
             }
         }
         return output
+    }
+
+    /// 双三次（Catmull-Rom）放大。用于 `upscale_factor > 1`。
+    /// Python 侧是 skimage `rescale(order=3)`（带 B 样条预滤波），两者视觉等价但非逐位一致。
+    static func upscale(_ image: ImageRGB, factor: Double) -> ImageRGB {
+        guard factor > 0, factor != 1 else { return image }
+        let width = max(1, Int((Double(image.width) * factor).rounded(.toNearestOrEven)))
+        let height = max(1, Int((Double(image.height) * factor).rounded(.toNearestOrEven)))
+        var output = ImageRGB(width: width, height: height)
+        let stepX = Double(image.width) / Double(width)
+        let stepY = Double(image.height) / Double(height)
+        for y in 0..<height {
+            let sourceY = (Double(y) + 0.5) * stepY - 0.5
+            let baseY = Int(floor(sourceY))
+            let fy = sourceY - Double(baseY)
+            for x in 0..<width {
+                let sourceX = (Double(x) + 0.5) * stepX - 0.5
+                let baseX = Int(floor(sourceX))
+                let fx = sourceX - Double(baseX)
+                let weightsX = cubicWeights(fx)
+                let weightsY = cubicWeights(fy)
+                var value = Vec3(0, 0, 0)
+                for j in 0..<4 {
+                    let sy = FastGaussian.reflect(baseY - 1 + j, image.height)
+                    for i in 0..<4 {
+                        let sx = FastGaussian.reflect(baseX - 1 + i, image.width)
+                        let weight = weightsX[i] * weightsY[j]
+                        value = value + image.pixel(sx, sy) * weight
+                    }
+                }
+                output.setPixel(x, y, value)
+            }
+        }
+        return output
+    }
+
+    private static func cubicWeights(_ t: Double) -> [Double] {
+        let t2 = t * t
+        let t3 = t2 * t
+        return [
+            (-t3 + 2 * t2 - t) / 2,
+            (3 * t3 - 5 * t2 + 2) / 2,
+            (-3 * t3 + 4 * t2 + t) / 2,
+            (t3 - t2) / 2,
+        ]
     }
 
     static func crop(_ image: ImageRGB, center: [Double], size: [Double]) -> ImageRGB {

@@ -1,7 +1,7 @@
 import Foundation
 
 final class SpectralLUTService {
-    let resolution: Int
+    private(set) var resolution: Int
     var inputGamutCompress = InputGamutSpec()
     private var filmingTCLUT: SpectralLUT?
     private var filmingKey: [Double]?
@@ -10,6 +10,19 @@ final class SpectralLUTService {
 
     init(resolution: Int) {
         self.resolution = resolution
+    }
+
+    /// 共享 LUT 服务时用于切换分辨率；分辨率变化会清空阶段 LUT。
+    func updateResolution(_ value: Int) {
+        guard value != resolution else { return }
+        resolution = value
+        invalidateStageLUTs()
+    }
+
+    /// 胶片/相纸或滤色片变化后需清空阶段 LUT。
+    func invalidateStageLUTs() {
+        enlargerLUT = nil
+        scannerLUT = nil
     }
 
     func getFilmingTCLUT(sensitivity: [[Double]], adaptation: Hanatos2025Adaptation) -> SpectralLUT {

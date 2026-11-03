@@ -33,6 +33,18 @@ private enum LibraryViewMode {
     case list
 }
 
+private enum LibrarySortMode: String {
+    case recent
+    case filename
+
+    var title: String {
+        switch self {
+        case .recent: return "最近导入"
+        case .filename: return "文件名"
+        }
+    }
+}
+
 struct LibraryView: View {
     let snapshot: LibrarySnapshot
     let actions: SkinActions
@@ -40,6 +52,34 @@ struct LibraryView: View {
     @State private var query = ""
     @State private var filter: LibraryFilter = .all
     @State private var viewMode: LibraryViewMode = .grid
+    @State private var sortMode: LibrarySortMode = .recent
+
+    private var visiblePhotos: [PhotoItem] {
+        let searched = snapshot.photos.filter { photo in
+            let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else { return true }
+            return photo.filename.localizedCaseInsensitiveContains(text)
+                || photo.film.localizedCaseInsensitiveContains(text)
+                || (photo.paper?.localizedCaseInsensitiveContains(text) ?? false)
+        }
+        let filtered = searched.filter { photo in
+            switch filter {
+            case .all: return true
+            case .favorite: return photo.favorite
+            case .adjusted: return photo.isGraded
+            case .red, .yellow, .green, .blue:
+                return photo.color == filter.tone
+            }
+        }
+        switch sortMode {
+        case .recent:
+            return filtered
+        case .filename:
+            return filtered.sorted {
+                $0.filename.localizedStandardCompare($1.filename) == .orderedAscending
+            }
+        }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -82,8 +122,8 @@ struct LibraryView: View {
 
             Spacer(minLength: 20)
 
-            SkinButton("导入文件夹", icon: "folder", kind: .secondary) {}
-            SkinButton("导入照片", icon: "square.and.arrow.down", kind: .primary) {}
+            SkinButton("导入文件夹", icon: "folder", kind: .secondary) { actions.importFolder() }
+            SkinButton("导入照片", icon: "square.and.arrow.down", kind: .primary) { actions.importPhotos() }
         }
         .frame(height: 32)
     }
@@ -123,7 +163,7 @@ struct LibraryView: View {
                 width: 240
             )
 
-            LibrarySortButton()
+            LibrarySortButton(mode: $sortMode)
 
             LibraryViewToggle(mode: $viewMode)
         }
@@ -140,6 +180,17 @@ struct LibraryView: View {
                 if snapshot.photos.isEmpty {
                     LibraryEmptyView(actions: actions)
                         .padding(.top, 64)
+                } else if visiblePhotos.isEmpty {
+                    VStack(spacing: 8) {
+                        Text("没有匹配的照片")
+                            .font(.skin(14, .medium))
+                            .foregroundStyle(SkinColor.text2)
+                        Text("试试清除搜索或切换筛选")
+                            .font(.skin(11))
+                            .foregroundStyle(SkinColor.text4)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 80)
                 } else {
                     Group {
                         switch viewMode {
@@ -167,7 +218,7 @@ struct LibraryView: View {
                 .tracking(0.2)
                 .foregroundStyle(SkinColor.text2)
 
-            Text(snapshot.sectionCount)
+            Text("\(visiblePhotos.count) 张照片")
                 .font(.skin(10.5).monospacedDigit())
                 .foregroundStyle(SkinColor.text3)
 
@@ -185,8 +236,12 @@ struct LibraryView: View {
                 LibraryFolderCard(folder: folder) {}
             }
 
-            ForEach(snapshot.photos) { photo in
-                LibraryPhotoCard(photo: photo, selected: false) {
+            ForEach(visiblePhotos) { photo in
+                LibraryPhotoCard(
+                    photo: photo,
+                    selected: photo.id == snapshot.currentID,
+                    actions: actions
+                ) {
                     actions.openPhoto(photo.id)
                 }
             }
@@ -195,8 +250,12 @@ struct LibraryView: View {
 
     private var list: some View {
         LazyVStack(spacing: 4) {
-            ForEach(snapshot.photos) { photo in
-                LibraryPhotoRow(photo: photo, isCurrent: false) {
+            ForEach(visiblePhotos) { photo in
+                LibraryPhotoRow(
+                    photo: photo,
+                    isCurrent: photo.id == snapshot.currentID,
+                    actions: actions
+                ) {
                     actions.openPhoto(photo.id)
                 }
             }
@@ -223,12 +282,17 @@ struct LibraryView: View {
 // MARK: - Sort
 
 private struct LibrarySortButton: View {
+    @Binding var mode: LibrarySortMode
     @State private var hovered = false
 
     var body: some View {
-        Button {} label: {
+        Menu {
+            ForEach([LibrarySortMode.recent, .filename], id: \.rawValue) { item in
+                Button(item.title) { mode = item }
+            }
+        } label: {
             HStack(spacing: 0) {
-                Text("最近导入")
+                Text(mode.title)
                     .font(.skin(11.5))
                     .foregroundStyle(hovered ? SkinColor.text1 : SkinColor.text3)
                 Spacer(minLength: 8)
@@ -240,7 +304,8 @@ private struct LibrarySortButton: View {
             .frame(width: 112, height: SkinMetric.controlHeight)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
         .onHover { hovered = $0 }
         .animation(SkinMotion.hover, value: hovered)
     }
@@ -349,17 +414,18 @@ private struct LibraryFolderCard: View {
 private struct LibraryPhotoCard: View {
     let photo: PhotoItem
     let selected: Bool
+    let actions: SkinActions
     let action: () -> Void
 
     @State private var hovered = false
-    @State private var favorite: Bool
     @State private var controlsVisible = false
 
-    init(photo: PhotoItem, selected: Bool, action: @escaping () -> Void) {
+    init(photo: PhotoItem, selected: Bool, actions: SkinActions,
+         action: @escaping () -> Void) {
         self.photo = photo
         self.selected = selected
+        self.actions = actions
         self.action = action
-        _favorite = State(initialValue: photo.favorite)
     }
 
     var body: some View {
@@ -387,7 +453,7 @@ private struct LibraryPhotoCard: View {
         .onHover { inside in
             hovered = inside
             withAnimation(SkinMotion.hover) {
-                controlsVisible = inside || favorite || photo.color != nil || selected
+                controlsVisible = inside || photo.favorite || photo.color != nil || selected
             }
         }
         .animation(SkinMotion.hover, value: hovered)
@@ -398,10 +464,21 @@ private struct LibraryPhotoCard: View {
             .fill(SkinColor.surface1)
             .aspectRatio(4.0 / 3.0, contentMode: .fit)
             .overlay {
-                Image(skinAsset: photo.asset)
-                    .resizable()
-                    .scaledToFill()
-                    .overlay(Color.white.opacity(hovered ? 0.045 : 0))
+                if let image = photo.thumbnailImage {
+                    Image(nsImage: image)
+                        .resizable()
+                        .scaledToFill()
+                        .overlay(Color.white.opacity(hovered ? 0.045 : 0))
+                } else {
+                    Rectangle()
+                        .fill(SkinColor.surface2)
+                        .overlay(
+                            Image(systemName: "photo")
+                                .font(.system(size: 26, weight: .light))
+                                .foregroundStyle(SkinColor.text4)
+                        )
+                        .overlay(Color.white.opacity(hovered ? 0.045 : 0))
+                }
             }
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             .overlay(
@@ -440,12 +517,17 @@ private struct LibraryPhotoCard: View {
                     }
                 }
                 .padding(8)
-                .opacity(controlsVisible || favorite || photo.color != nil || selected ? 1 : 0)
+                .opacity(controlsVisible || photo.favorite || photo.color != nil || selected ? 1 : 0)
             }
     }
 
     private var colorButton: some View {
-        Button {} label: {
+        Menu {
+            Button("无标签") { actions.setColorLabel(photo.id, nil) }
+            ForEach(ColorLabel.allCases) { label in
+                Button(label.title) { actions.setColorLabel(photo.id, label) }
+            }
+        } label: {
             ZStack {
                 Circle().fill(Color.black.opacity(0.52))
                 Circle().strokeBorder(Color.white.opacity(0.10), lineWidth: 1)
@@ -461,20 +543,22 @@ private struct LibraryPhotoCard: View {
             }
             .frame(width: 22, height: 22)
         }
-        .buttonStyle(.plain)
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
         .help("颜色标签")
     }
 
     private var starButton: some View {
         Button {
-            withAnimation(SkinMotion.state) { favorite.toggle() }
+            actions.toggleFavorite(photo.id)
         } label: {
             ZStack {
                 Circle().fill(Color.black.opacity(0.52))
                 Circle().strokeBorder(Color.white.opacity(0.10), lineWidth: 1)
-                Image(systemName: favorite ? "star.fill" : "star")
+                Image(systemName: photo.favorite ? "star.fill" : "star")
                     .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(favorite ? SkinColor.accent : SkinColor.text2)
+                    .foregroundStyle(photo.favorite ? SkinColor.accent : SkinColor.text2)
             }
             .frame(width: 22, height: 22)
         }
@@ -483,7 +567,11 @@ private struct LibraryPhotoCard: View {
     }
 
     private var moreButton: some View {
-        Button {} label: {
+        Menu {
+            Button("从库中移除", role: .destructive) {
+                actions.removePhoto(photo.id)
+            }
+        } label: {
             ZStack {
                 Circle().fill(Color.black.opacity(0.52))
                 Circle().strokeBorder(Color.white.opacity(0.10), lineWidth: 1)
@@ -493,7 +581,9 @@ private struct LibraryPhotoCard: View {
             }
             .frame(width: 22, height: 22)
         }
-        .buttonStyle(.plain)
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
         .help("更多操作")
     }
 }
@@ -503,16 +593,17 @@ private struct LibraryPhotoCard: View {
 private struct LibraryPhotoRow: View {
     let photo: PhotoItem
     let isCurrent: Bool
+    let actions: SkinActions
     let action: () -> Void
 
     @State private var hovered = false
-    @State private var favorite: Bool
 
-    init(photo: PhotoItem, isCurrent: Bool, action: @escaping () -> Void) {
+    init(photo: PhotoItem, isCurrent: Bool, actions: SkinActions,
+         action: @escaping () -> Void) {
         self.photo = photo
         self.isCurrent = isCurrent
+        self.actions = actions
         self.action = action
-        _favorite = State(initialValue: photo.favorite)
     }
 
     var body: some View {
@@ -521,7 +612,17 @@ private struct LibraryPhotoRow: View {
                 .fill(SkinColor.surface1)
                 .frame(width: 96, height: 72)
                 .overlay {
-                    Image(skinAsset: photo.asset).resizable().scaledToFill()
+                    if let image = photo.thumbnailImage {
+                        Image(nsImage: image).resizable().scaledToFill()
+                    } else {
+                        Rectangle()
+                            .fill(SkinColor.surface2)
+                            .overlay(
+                                Image(systemName: "photo")
+                                    .font(.system(size: 18, weight: .light))
+                                    .foregroundStyle(SkinColor.text4)
+                            )
+                    }
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                 .overlay(
@@ -551,10 +652,26 @@ private struct LibraryPhotoRow: View {
                         .frame(width: 7, height: 7)
                         .frame(width: 28, height: 28)
                 }
-                SkinIconButton(favorite ? "star.fill" : "star", size: 11, frame: 28, active: favorite) {
-                    withAnimation(SkinMotion.state) { favorite.toggle() }
+                SkinIconButton(
+                    photo.favorite ? "star.fill" : "star",
+                    size: 11, frame: 28, active: photo.favorite
+                ) {
+                    actions.toggleFavorite(photo.id)
                 }
-                SkinIconButton("ellipsis", size: 11, frame: 28)
+                Menu {
+                    Button("从库中移除", role: .destructive) {
+                        actions.removePhoto(photo.id)
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(SkinColor.text2)
+                        .frame(width: 28, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
             }
         }
         .padding(.leading, 6)
@@ -618,8 +735,8 @@ private struct LibraryEmptyView: View {
             Spacer().frame(height: 20)
 
             HStack(spacing: 8) {
-                SkinButton("导入照片", icon: "square.and.arrow.down", kind: .primary) {}
-                SkinButton("导入文件夹", icon: "folder", kind: .secondary) {}
+                SkinButton("导入照片", icon: "square.and.arrow.down", kind: .primary) { actions.importPhotos() }
+                SkinButton("导入文件夹", icon: "folder", kind: .secondary) { actions.importFolder() }
             }
         }
         .frame(maxWidth: .infinity)

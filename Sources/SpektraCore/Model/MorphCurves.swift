@@ -1,7 +1,7 @@
 import Foundation
 import Darwin
 
-struct PrintCurvesMorphParams {
+struct PrintCurvesMorphParams: Codable {
     var active: Bool = false
     var gammaFactor: Double = 1.0
     var gammaFactorFast: Double = 1.0

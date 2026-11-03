@@ -7,7 +7,7 @@ CORE="$ROOT/Sources/SpektraCore"
 UI="$ROOT/SpektraSkin/Sources/SpektraSkin"
 
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/SamplePhotos" "$APP/Contents/Resources/Data"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/Data"
 
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -51,13 +51,12 @@ swiftc \
   -target "$(uname -m)-apple-macosx14.0" \
   -framework SwiftUI -framework AppKit \
   -framework Accelerate -framework Metal \
-  -framework ImageIO -framework CoreGraphics \
+  -framework ImageIO -framework CoreGraphics -framework CoreImage \
   -framework ColorSync -framework UniformTypeIdentifiers \
   "${EXTRA_FLAGS[@]}" \
   "${FILES[@]}" \
   -o "$APP/Contents/MacOS/Spektrafilm"
 
-cp "$UI/Resources/SamplePhotos"/*.jpg "$APP/Contents/Resources/SamplePhotos/"
 rsync -a "$CORE/Resources/Data/" "$APP/Contents/Resources/Data/"
 codesign --force --sign - "$APP" >/dev/null 2>&1 || true
 

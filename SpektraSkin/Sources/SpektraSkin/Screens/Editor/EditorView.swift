@@ -24,7 +24,11 @@ struct EditorView: View {
                     PreviewStage(
                         photo: snapshot.photo,
                         filmName: snapshot.filmName,
-                        paperName: snapshot.paperName
+                        paperName: snapshot.paperName,
+                        previewImage: snapshot.previewImage,
+                        originalImage: snapshot.originalImage,
+                        previewScale: snapshot.previewScale,
+                        actions: actions
                     )
                     Filmstrip(
                         items: snapshot.filmstrip,
@@ -51,14 +55,6 @@ private struct EditorTopBar: View {
     let snapshot: EditorSnapshot
     let actions: SkinActions
 
-    @State private var favorite: Bool
-
-    init(snapshot: EditorSnapshot, actions: SkinActions) {
-        self.snapshot = snapshot
-        self.actions = actions
-        _favorite = State(initialValue: snapshot.photo.favorite)
-    }
-
     var body: some View {
         HStack(spacing: 10) {
             SkinButton("照片库", icon: "chevron.left", kind: .secondary, height: 28) {
@@ -81,12 +77,12 @@ private struct EditorTopBar: View {
             .frame(maxWidth: .infinity, alignment: .leading)
 
             SkinIconButton(
-                favorite ? "star.fill" : "star",
+                snapshot.photo.favorite ? "star.fill" : "star",
                 size: 14,
                 frame: 28,
-                active: favorite
+                active: snapshot.photo.favorite
             ) {
-                withAnimation(SkinMotion.state) { favorite.toggle() }
+                actions.toggleFavorite(snapshot.photo.id)
             }
             .help("收藏这张照片")
 
@@ -134,14 +130,21 @@ private struct GradeSplitButton: View {
                 .fill(SkinColor.accentOn.opacity(0.16))
                 .frame(width: 1, height: 15)
 
-            Button(action: actions.exportOptions) {
+            Menu {
+                Button("导出 16-bit TIFF（sRGB）") { actions.exportAs("tiff16") }
+                Button("导出 16-bit TIFF（ProPhoto 线性）") { actions.exportAs("tiff16-prophoto") }
+                Button("导出 8-bit TIFF") { actions.exportAs("tiff8") }
+                Button("导出 EXR half（ACES 线性）") { actions.exportAs("exr16") }
+            } label: {
                 Image(systemName: "chevron.down")
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(SkinColor.accentOn.opacity(0.82))
                     .frame(width: 24, height: 28)
                     .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
         }
         .background(
             RoundedRectangle(cornerRadius: SkinRadius.control, style: .continuous)

@@ -1257,5 +1257,20 @@ git rm -rf .
 
 ---
 
+## 附录 E：实施进度（`swift-native`）
+
+已完成：profile/色彩/光谱上采样/三阶段确定性链路、输入色域压缩、LUT、halation、USM、DIR couplers、颗粒、
+眩光、四族柔光镜、印相像素尺寸、全部输出压缩算法（cam16ucs / oklch / oklrab / jzazbz / aces_rgc）、
+出厂中灰滤镜与胶片特定参数 digest、TIFF/EXR/PNG/JPEG 导出（ICC + EXIF/IPTC）、CIRAWFilter RAW 解码、
+自动曝光 7 种方法与预览重采样对拍、TIFF Deflate、双三次放大、预览渲染调度（取消/共享 LUT/降采样）、
+颗粒与 FFT 性能优化、照片库（导入识别/索引持久化/缩略图）、导出队列（进度/取消）、
+`SpektraSkin` 引擎接线（快照/动作/真实预览与缩略图/直方图/导入导出/快速基线持久化）。
+对拍数据见 [parity_report.md](parity_report.md)。
+
+剩余：放大与 skimage `rescale(order=3)` 的逐位一致、真实 RAW 样本验证与 lensfun 校正、XMP 元数据复制、
+调色台（独立二次调色页面）的引擎化。
+
+---
+
 > 本计划书完成于对当前 Python 仓库的通读审计之后。任何与代码冲突的表述，以代码为准；实施前请先完成 P0 的参考冻结与生成物导出。
-</content>
+

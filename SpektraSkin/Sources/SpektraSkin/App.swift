@@ -7,7 +7,7 @@ struct SpektraSkinApp: App {
 
     var body: some Scene {
         WindowGroup {
-            RootView()
+            EngineRootView(host: EngineHost.shared)
                 .frame(minWidth: 1180, minHeight: 760)
                 .preferredColorScheme(.dark)
                 .background(SkinColor.app)
@@ -32,7 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             window.titleVisibility = .hidden
             window.titlebarAppearsTransparent = true
             window.styleMask.insert(.fullSizeContentView)
-            window.isMovableByWindowBackground = true
+            window.isMovableByWindowBackground = false
             window.backgroundColor = NSColor(skinHex: 0x141311)
             window.setContentSize(NSSize(width: 1460, height: 940))
             window.minSize = NSSize(width: 1180, height: 760)

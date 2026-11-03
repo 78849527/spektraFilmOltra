@@ -94,8 +94,6 @@ enum SpatialEffects {
     }
 
     static func diffusionFilter(_ image: ImageRGB, params: DiffusionFilterParams, pixelSizeUM: Double) -> ImageRGB {
-        guard params.active, pixelSizeUM > 0 else { return image }
-        // Full diffusion PSF families are ported in a later pass.
-        return image
+        DiffusionFilter.apply(image, params: params, pixelSizeUM: pixelSizeUM)
     }
 }

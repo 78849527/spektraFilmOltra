@@ -169,6 +169,22 @@ enum ColorMath {
         return destination.fromXYZ.apply(adapted)
     }
 
+    /// 预先把「RGB → 适配到目标白点的 XYZ」合成单个 3×3 矩阵，供逐像素路径复用。
+    static func rgbToXYZMatrix(spaceName: String, illuminantXY: (Double, Double),
+                               adaptation: Mat3 = ColorMath.cat16) -> Mat3? {
+        guard let space = ColorDataStore.shared.spaces[spaceName] else { return nil }
+        let source = space.whitepoint
+        let destination = xyToXYZ(illuminantXY.0, illuminantXY.1)
+        let sourceLMS = adaptation.apply(source)
+        let destinationLMS = adaptation.apply(destination)
+        let ratio = Mat3([
+            destinationLMS.x / sourceLMS.x, 0, 0,
+            0, destinationLMS.y / sourceLMS.y, 0,
+            0, 0, destinationLMS.z / sourceLMS.z,
+        ])
+        return adaptation.inverted() * ratio * adaptation * space.toXYZ
+    }
+
     static func rgbToXYZ(_ rgb: Vec3, spaceName: String, illuminantXY: (Double, Double)? = nil,
                          applyCCTFDecoding: Bool = false, adaptation: Mat3 = ColorMath.cat16) -> Vec3 {
         guard let space = ColorDataStore.shared.spaces[spaceName] else {

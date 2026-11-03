@@ -70,11 +70,30 @@ final class FilmingStage {
             for row in normalized { minValue = min(minValue, row[c]) }
             for i in 0..<curves.count { curves[i][c] -= minValue }
         }
-        return DensityCurves.developSimple(
+        let density = DensityCurves.developSimple(
             logRaw: logRaw,
             logExposure: film.data.logExposure,
             densityCurves: curves,
             gammaFactor: [filmRender.densityCurveGamma, filmRender.densityCurveGamma, filmRender.densityCurveGamma]
+        )
+        let corrected = Couplers.applyDensityCorrection(
+            densityCMY: density,
+            logRaw: logRaw,
+            pixelSizeUM: pixelSizeUM,
+            logExposure: film.data.logExposure,
+            densityCurves: curves,
+            params: filmRender.dirCouplers,
+            profileType: film.info.type,
+            gammaFactor: filmRender.densityCurveGamma
+        )
+        return Grain.apply(
+            densityCMY: corrected,
+            pixelSizeUM: pixelSizeUM,
+            params: filmRender.grain,
+            densityCurves: curves,
+            densityCurvesLayers: film.data.densityCurvesLayers,
+            profileType: film.info.type,
+            bypass: false
         )
     }
 
@@ -114,13 +133,18 @@ final class FilmingStage {
         adaptation.applySurface = settings.applyHanatos2025AdaptationSurface
         adaptation.spectralGaussianBlur = settings.spectralGaussianBlur
         let tcLUT = lutService.getFilmingTCLUT(sensitivity: sensitivity, adaptation: adaptation)
+        let illuminantXY = (try? Illuminants.xy(film.info.referenceIlluminant)) ?? (0.3127, 0.3290)
+        let toXYZMatrix = ColorMath.rgbToXYZMatrix(
+            spaceName: colorSpace, illuminantXY: illuminantXY, adaptation: ColorMath.cat16
+        )
         var output = rgb
         for row in 0..<rgb.height {
             for col in 0..<rgb.width {
                 let raw = SpectralUpsampling.rgbToRawHanatos(
                     rgb.pixel(col, row), sensitivity: sensitivity, colorSpace: colorSpace,
                     applyCCTFDecoding: applyCCTFDecoding,
-                    referenceIlluminant: film.info.referenceIlluminant, tcLUT: tcLUT
+                    referenceIlluminant: film.info.referenceIlluminant, tcLUT: tcLUT,
+                    illuminantXY: illuminantXY, toXYZMatrix: toXYZMatrix
                 )
                 output.setPixel(col, row, raw)
             }

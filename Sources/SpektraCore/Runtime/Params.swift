@@ -1,6 +1,6 @@
 import Foundation
 
-struct DiffusionFilterParams {
+struct DiffusionFilterParams: Codable {
     var active: Bool = false
     var filterFamily: String = "black_pro_mist"
     var strength: Double = 0.5
@@ -14,7 +14,7 @@ struct DiffusionFilterParams {
     var bloomSize: Double = 1.0
 }
 
-struct CameraParams {
+struct CameraParams: Codable {
     var exposureCompensationEV: Double = 0.0
     var autoExposure: Bool = true
     var autoExposureMethod: String = "center_weighted"
@@ -25,7 +25,7 @@ struct CameraParams {
     var diffusionFilter = DiffusionFilterParams()
 }
 
-struct ScannerParams {
+struct ScannerParams: Codable {
     var lensBlur: Double = 0.0
     var whiteCorrection: Bool = false
     var blackCorrection: Bool = false
@@ -34,7 +34,7 @@ struct ScannerParams {
     var unsharpMask: [Double] = [0.7, 0.7]
 }
 
-struct GrainParams {
+struct GrainParams: Codable {
     var active: Bool = true
     var sublayersActive: Bool = true
     var particleAreaUM2: Double = 0.2
@@ -48,7 +48,7 @@ struct GrainParams {
     var nSubLayers: Int = 1
 }
 
-struct HalationParams {
+struct HalationParams: Codable {
     var active: Bool = true
     var scatterAmount: Double = 1.0
     var scatterSpatialScale: Double = 1.0
@@ -67,7 +67,7 @@ struct HalationParams {
     var halationRenormalize: Bool = true
 }
 
-struct DirCouplersParams {
+struct DirCouplersParams: Codable {
     var active: Bool = true
     var amount: Double = 1.0
     var inhibitionSameLayer: Double = 1.0
@@ -81,14 +81,14 @@ struct DirCouplersParams {
     var diffusionTailWeight: Double = 0.06
 }
 
-struct GlareParams {
+struct GlareParams: Codable {
     var active: Bool = true
     var percent: Double = 0.03
     var roughness: Double = 0.7
     var blur: Double = 0.5
 }
 
-struct FilmRenderParams {
+struct FilmRenderParams: Codable {
     var densityCurveGamma: Double = 1.0
     var grain = GrainParams()
     var halation = HalationParams()
@@ -96,12 +96,12 @@ struct FilmRenderParams {
     var glare = GlareParams()
 }
 
-struct PrintRenderParams {
+struct PrintRenderParams: Codable {
     var glare = GlareParams()
     var densityCurvesMorph = PrintCurvesMorphParams()
 }
 
-struct IOParams {
+struct IOParams: Codable {
     var inputColorSpace: String = "ProPhoto RGB"
     var inputCCTFDecoding: Bool = false
     var outputColorSpace: String = "sRGB"
@@ -118,13 +118,13 @@ struct IOParams {
     var outputGamutCompressKnee: [Double] = [0, 1, 6]
 }
 
-struct DebugParams {
+struct DebugParams: Codable {
     var deactivateSpatialEffects: Bool = false
     var deactivateStochasticEffects: Bool = false
     var lutMode: Bool = false
 }
 
-struct SettingsParams {
+struct SettingsParams: Codable {
     var rgbToRawMethod: String = "hanatos2025"
     var applyHanatos2025AdaptationWindow: Bool = true
     var applyHanatos2025AdaptationSurface: Bool = false
@@ -132,7 +132,7 @@ struct SettingsParams {
     var useEnlargerLUT: Bool = true
     var useScannerLUT: Bool = true
     var lutResolution: Int = 17
-    var useFastStats: Bool = true
+    var useFastStats: Bool = false
     var previewMaxSize: Int = 640
     var previewMode: Bool = false
     var neutralPrintFiltersFromDatabase: Bool = true

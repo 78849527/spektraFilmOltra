@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 
 // MARK: - 共享值类型
 
@@ -28,6 +29,7 @@ struct PhotoItem: Identifiable, Hashable {
     let favorite: Bool
     let color: ColorLabel?
     let isGraded: Bool
+    var thumbnailPath: String? = nil
 
     var metaLine: String {
         [film, dimensions].filter { !$0.isEmpty }.joined(separator: " · ")
@@ -41,6 +43,23 @@ struct PhotoItem: Identifiable, Hashable {
         let parts = dimensions.split(separator: "×").compactMap { Double($0) }
         guard parts.count == 2, parts[1] > 0 else { return 4.0 / 3.0 }
         return CGFloat(parts[0] / parts[1])
+    }
+
+    var thumbnailImage: NSImage? {
+        guard let thumbnailPath else { return nil }
+        return ThumbnailImageCache.image(at: thumbnailPath)
+    }
+}
+
+enum ThumbnailImageCache {
+    private static let cache = NSCache<NSString, NSImage>()
+
+    static func image(at path: String) -> NSImage? {
+        let key = path as NSString
+        if let cached = cache.object(forKey: key) { return cached }
+        guard let image = NSImage(contentsOfFile: path) else { return nil }
+        cache.setObject(image, forKey: key)
+        return image
     }
 }
 
@@ -59,6 +78,7 @@ struct LibrarySnapshot {
     let folders: [FolderItem]
     let photos: [PhotoItem]
     let statusMessage: String
+    var currentID: String? = nil
 }
 
 // MARK: - 预设
@@ -171,11 +191,15 @@ struct EditorSnapshot {
     let currentFilmID: String
     let currentPaperID: String
     let stripCount: Int
+    var previewImage: NSImage? = nil
+    var originalImage: NSImage? = nil
+    var previewScale: Double = 0.25
 }
 
 struct GradeSnapshot {
     let photo: PhotoItem
     let handoffMeta: String
+    var previewImage: NSImage? = nil
 }
 
 // MARK: - 后端边界
@@ -202,6 +226,19 @@ struct SkinActions {
     var resetParameters: () -> Void = {}
     var exportCurrent: () -> Void = {}
     var exportOptions: () -> Void = {}
+    // 引擎回调（静态预览时保持空实现）
+    var quickChanged: (String, Double) -> Void = { _, _ in }
+    var padChanged: (Double, Double) -> Void = { _, _ in }
+    var proChanged: (String, Double) -> Void = { _, _ in }
+    var proToggled: (String, Bool) -> Void = { _, _ in }
+    var importPhotos: () -> Void = {}
+    var importFolder: () -> Void = {}
+    var exportAs: (String) -> Void = { _ in }
+    var renderScaleChanged: (Double) -> Void = { _ in }
+    var reRender: () -> Void = {}
+    var toggleFavorite: (String) -> Void = { _ in }
+    var setColorLabel: (String, ColorLabel?) -> Void = { _, _ in }
+    var removePhoto: (String) -> Void = { _ in }
 
     static let preview = SkinActions()
 }

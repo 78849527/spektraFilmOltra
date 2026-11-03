@@ -76,6 +76,21 @@ struct PipelineSmoke {
         if ProcessInfo.processInfo.environment["SPEKTRA_NO_CCTF"] != nil {
             params.io.outputCCTFEncoding = false
         }
+        let env = ProcessInfo.processInfo.environment
+        if env["SPEKTRA_COUPLERS"] != nil { params.filmRender.dirCouplers.active = true }
+        if env["SPEKTRA_GRAIN"] != nil {
+            params.filmRender.grain.active = true
+            params.filmRender.grain.sublayersActive = true
+        }
+        if env["SPEKTRA_GLARE"] != nil { params.printRender.glare.active = true }
+        if let algorithm = env["SPEKTRA_OUTPUT"] {
+            params.io.outputGamutCompressAlgorithm = algorithm
+        }
+        if env["SPEKTRA_ENLARGER_DIFFUSION"] != nil {
+            params.enlarger.diffusionFilter.active = true
+            params.enlarger.diffusionFilter.filterFamily = "black_pro_mist"
+            params.enlarger.diffusionFilter.strength = 0.5
+        }
         let spatial = ProcessInfo.processInfo.environment["SPEKTRA_SPATIAL"] != nil
         if spatial {
             params.filmRender.halation.active = true

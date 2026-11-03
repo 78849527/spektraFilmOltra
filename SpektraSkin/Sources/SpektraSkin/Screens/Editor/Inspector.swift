@@ -16,10 +16,10 @@ struct InspectorView: View {
 
                 Group {
                     if mode == 0 {
-                        QuickPanel(snapshot: snapshot)
+                        QuickPanel(snapshot: snapshot, actions: actions)
                             .transition(.opacity)
                     } else {
-                        ProPanel(pages: snapshot.proPages)
+                        ProPanel(pages: snapshot.proPages, actions: actions)
                             .transition(.opacity)
                     }
                 }
@@ -98,13 +98,15 @@ struct InspectorView: View {
 
 struct QuickPanel: View {
     let snapshot: EditorSnapshot
+    let actions: SkinActions
 
     @State private var values: [String: Double]
     @State private var padX: Double
     @State private var padY: Double
 
-    init(snapshot: EditorSnapshot) {
+    init(snapshot: EditorSnapshot, actions: SkinActions = .preview) {
         self.snapshot = snapshot
+        self.actions = actions
         let axes = snapshot.quickGroups.flatMap(\.axes)
         _values = State(initialValue: Dictionary(uniqueKeysWithValues: axes.map { ($0.id, $0.value) }))
         let pad = snapshot.quickGroups.compactMap(\.pad).first
@@ -141,7 +143,9 @@ struct QuickPanel: View {
 
                 Spacer().frame(height: 10)
 
-                Button {} label: {
+                Button {
+                    actions.resetParameters()
+                } label: {
                     Text("重置快速")
                         .font(.skin(11.5, .medium))
                         .foregroundStyle(SkinColor.text2)
@@ -177,7 +181,10 @@ struct QuickPanel: View {
     private func binding(for axis: QuickAxis) -> Binding<Double> {
         Binding(
             get: { values[axis.id] ?? axis.value },
-            set: { values[axis.id] = $0 }
+            set: { newValue in
+                values[axis.id] = newValue
+                actions.quickChanged(axis.id, newValue)
+            }
         )
     }
 
@@ -192,7 +199,7 @@ struct QuickPanel: View {
 
             HStack {
                 Spacer()
-                SkinColorPad(x: $padX, y: $padY)
+                SkinColorPad(x: padXBinding, y: padYBinding)
                 Spacer()
             }
 
@@ -209,6 +216,26 @@ struct QuickPanel: View {
             }
         }
         .padding(.vertical, 3)
+    }
+
+    private var padXBinding: Binding<Double> {
+        Binding(
+            get: { padX },
+            set: { newValue in
+                padX = newValue
+                actions.padChanged(newValue, padY)
+            }
+        )
+    }
+
+    private var padYBinding: Binding<Double> {
+        Binding(
+            get: { padY },
+            set: { newValue in
+                padY = newValue
+                actions.padChanged(padX, newValue)
+            }
+        )
     }
 
     private func ccText(_ value: Double) -> String {

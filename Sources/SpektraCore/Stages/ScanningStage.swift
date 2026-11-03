@@ -164,13 +164,16 @@ final class ScanningStage {
     }
 
     private func addGlare(_ xyz: ImageRGB, illuminantXYZ: Vec3, glare: GlareParams?) -> ImageRGB {
-        // Filled in by the stochastic module; identity for the deterministic baseline.
-        xyz
+        Glare.addGlare(xyz, illuminantXYZ: illuminantXYZ, params: glare)
     }
 
     private func compressRGB(_ rgb: ImageRGB) -> ImageRGB {
-        // Filled in by the gamut compression module; identity for the deterministic baseline.
-        rgb
+        OutputGamutCompression.apply(
+            rgb,
+            algorithm: io.outputGamutCompressAlgorithm,
+            knee: io.outputGamutCompressKnee,
+            outputColorSpace: io.outputColorSpace
+        )
     }
 }
 

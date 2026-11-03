@@ -95,13 +95,27 @@ struct GradeView: View {
                     aspect: snapshot.photo.aspectRatio
                 )
 
-                Image(skinAsset: snapshot.photo.asset)
-                    .resizable()
-                    .scaledToFill()
+                if let preview = snapshot.previewImage {
+                    Image(nsImage: preview)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: fit.width, height: fit.height)
+                        .clipped()
+                        .shadow(color: .black.opacity(0.5), radius: 26, y: 18)
+                        .position(x: geo.size.width / 2, y: geo.size.height / 2)
+                } else {
+                    VStack(spacing: 8) {
+                        Image(systemName: "slider.horizontal.3")
+                            .font(.system(size: 30, weight: .light))
+                            .foregroundStyle(SkinColor.text4)
+                        Text("调色台尚未接入")
+                            .font(.skin(11))
+                            .foregroundStyle(SkinColor.text3)
+                    }
                     .frame(width: fit.width, height: fit.height)
-                    .clipped()
-                    .shadow(color: .black.opacity(0.5), radius: 26, y: 18)
+                    .background(SkinColor.surface2)
                     .position(x: geo.size.width / 2, y: geo.size.height / 2)
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
