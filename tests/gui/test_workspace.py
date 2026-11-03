@@ -88,7 +88,7 @@ class _FakeController:
     def current_output_display_image(self):
         return np.zeros((6, 8, 3), dtype=np.uint8)
 
-    def start_handoff(self, path: str, callback=None) -> bool:
+    def start_handoff(self, path: str, callback=None, *, fingerprint: str | None = None) -> bool:
         self.handoff_calls.append(path)
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -366,6 +366,29 @@ def test_workspace_blocks_switching_while_simulating(tmp_path: Path) -> None:
     assert window._stack.currentIndex() == 1
     controller.simulating = False
 
+    window.close()
+
+
+def test_workspace_persists_and_restores_frame_state(tmp_path: Path) -> None:
+    window, store, controller = _window(tmp_path)
+    item = store.all_items()[0]
+    window.open_item(item.id)
+    _app().processEvents()
+
+    window.editor_page.set_frame_state({'enabled': False, 'preset': 'film_135'})
+    window._on_frame_changed()
+    window._persist_active_state()
+
+    saved = store.item(item.id)
+    assert saved is not None
+    assert saved.state['frame'] == {'enabled': False, 'preset': 'film_135'}
+
+    window.show_library()
+    window.editor_page.set_frame_state(None)
+    window.open_item(item.id)
+    _app().processEvents()
+
+    assert window.editor_page.frame_state_dict() == {'enabled': False, 'preset': 'film_135'}
     window.close()
 
 

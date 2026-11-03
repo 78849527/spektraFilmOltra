@@ -242,11 +242,16 @@ def set_output_layer_metadata(
     output_color_space_key: str,
     output_cctf_encoding_key: str,
     output_display_transform_key: str,
+    display_image: np.ndarray | None = None,
+    output_display_image_key: str = 'pipeline_display_output',
 ) -> None:
     layer.metadata[output_float_data_key] = np.asarray(float_image, dtype=np.float32)
     layer.metadata[output_color_space_key] = output_color_space
     layer.metadata[output_cctf_encoding_key] = output_cctf_encoding
     layer.metadata[output_display_transform_key] = use_display_transform
+    if display_image is not None:
+        # 未加边框的显示像素，边框开关切换时直接拿它重新合成，不重跑显影。
+        layer.metadata[output_display_image_key] = np.asarray(display_image)
 
 
 def set_output_layer_interpolation(layer: NapariImageLayer, mode: str) -> None:
@@ -282,6 +287,7 @@ class ViewerLayerService:
     output_color_space_key: str
     output_cctf_encoding_key: str
     output_display_transform_key: str
+    output_display_image_key: str = 'pipeline_display_output'
     _output_animations: dict[int, _LayerAnimationHandle] = field(default_factory=dict, init=False, repr=False)
 
     def image_layer(self, layer_name: str) -> NapariImageLayer | None:
@@ -379,6 +385,7 @@ class ViewerLayerService:
         output_cctf_encoding: bool,
         use_display_transform: bool,
         output_interpolation_mode: str = 'spline36',
+        display_image: np.ndarray | None = None,
     ) -> None:
         existing_layer = self.image_layer(OUTPUT_LAYER_NAME)
         animate_on_show = existing_layer is None or not bool(getattr(existing_layer, 'visible', True))
@@ -420,6 +427,8 @@ class ViewerLayerService:
             output_color_space_key=self.output_color_space_key,
             output_cctf_encoding_key=self.output_cctf_encoding_key,
             output_display_transform_key=self.output_display_transform_key,
+            display_image=display_image,
+            output_display_image_key=self.output_display_image_key,
         )
         set_output_layer_interpolation(layer, output_interpolation_mode)
         _lock_contrast_limits(layer)

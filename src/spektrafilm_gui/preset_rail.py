@@ -1,18 +1,23 @@
-"""左侧预设台：胶片 / 相纸。
+"""左侧预设台：胶片 / 相纸 / 边框。
 
 Spektra 的运行时没有「套用外部 LUT」的入口，所以这里不做 LUT 预设，
 只做它原生支持的胶片与相纸组合。点击卡片仍然走
 「设置下拉值 + apply_profile_defaults」这条原有链路。
+
+边框不是显影参数，只是显示层的合成，所以点击卡片只发出 key，
+由上层重新合成预览与导出像素。
 """
 
 from __future__ import annotations
 
 import hashlib
 
+import numpy as np
 from qtpy import QtCore, QtGui, QtWidgets
 
 from spektrafilm.model.stocks import FilmStocks, PrintPapers
 from spektrafilm_gui import shell_icons
+from spektrafilm_gui.film_frame import DEFAULT_FRAME_PRESET, FRAME_PRESETS, apply_frame
 from spektrafilm_gui.library_page import ElidedLabel
 from spektrafilm_gui.theme_oflim import TEXT_3
 from spektrafilm_gui.ui_names import (
@@ -65,6 +70,13 @@ def _paper_entries() -> list[dict[str, str]]:
             'meta': PAPER_NOTES.get(raw, '彩色相纸'),
         })
     return entries
+
+
+def _frame_entries() -> list[dict[str, str]]:
+    return [
+        {'raw': preset.key, 'name': preset.name, 'brand': '', 'meta': preset.subtitle}
+        for preset in FRAME_PRESETS
+    ]
 
 
 class _StockSwatch(QWidget):
@@ -128,10 +140,51 @@ class _StockSwatch(QWidget):
             painter.end()
 
 
+class _FrameSwatch(QWidget):
+    """把一张小样张真正套上边框后画出来，卡片缩略图即所见。"""
+
+    def __init__(self, key: str, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setFixedSize(38, 38)
+        self._pixmap = self._render(key)
+
+    @staticmethod
+    def _render(key: str) -> QtGui.QPixmap:
+        sample_height, sample_width = 30, 36
+        ramp = np.linspace(36, 214, sample_width, dtype=np.uint8)
+        sample = np.empty((sample_height, sample_width, 3), dtype=np.uint8)
+        sample[..., 0] = ramp[None, :]
+        sample[..., 1] = (ramp * 0.92).astype(np.uint8)[None, :]
+        sample[..., 2] = (ramp * 0.78).astype(np.uint8)[None, :]
+        framed = np.ascontiguousarray(apply_frame(sample, key, padding=0.05))
+        height, width = framed.shape[:2]
+        image = QtGui.QImage(framed.data, width, height, width * 3, QtGui.QImage.Format_RGB888).copy()
+        pixmap = QtGui.QPixmap.fromImage(image)
+        return pixmap.scaled(38, 38, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt API name
+        del event
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
+            x = (self.width() - self._pixmap.width()) // 2
+            y = (self.height() - self._pixmap.height()) // 2
+            painter.drawPixmap(x, y, self._pixmap)
+        finally:
+            painter.end()
+
+
 class PresetCard(QFrame):
     selected = Signal(str)
 
-    def __init__(self, entry: dict[str, str], *, is_paper: bool = False, parent: QWidget | None = None):
+    def __init__(
+        self,
+        entry: dict[str, str],
+        *,
+        is_paper: bool = False,
+        is_frame: bool = False,
+        parent: QWidget | None = None,
+    ):
         super().__init__(parent)
         self.setObjectName('presetCard')
         self.entry = entry
@@ -139,7 +192,7 @@ class PresetCard(QFrame):
         self.setFixedHeight(54)
         self._selected = False
 
-        swatch = _StockSwatch(entry['raw'], is_paper=is_paper)
+        swatch = _FrameSwatch(entry['raw']) if is_frame else _StockSwatch(entry['raw'], is_paper=is_paper)
         swatch.setFixedSize(38, 38)
         name = ElidedLabel(entry['name'])
         name.setObjectName('presetName')
@@ -179,6 +232,7 @@ class PresetCard(QFrame):
 class PresetRail(QWidget):
     film_selected = Signal(str)
     paper_selected = Signal(str)
+    frame_selected = Signal(str)
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -186,11 +240,13 @@ class PresetRail(QWidget):
         self.setFixedWidth(300)
         self._films = _film_entries()
         self._papers = _paper_entries()
+        self._frames = _frame_entries()
         self._tab = 'film'
         self._brand = '全部'
         self._search = ''
         self._current_film = ''
         self._current_paper = ''
+        self._current_frame = DEFAULT_FRAME_PRESET
         self._cards: dict[str, PresetCard] = {}
         self._build_ui()
         self._rebuild()
@@ -207,23 +263,26 @@ class PresetRail(QWidget):
         self._tab_group.setExclusive(True)
         self._film_tab = QPushButton('胶片')
         self._paper_tab = QPushButton('相纸')
-        for index, button in enumerate((self._film_tab, self._paper_tab)):
+        self._frame_tab = QPushButton('边框')
+        tab_keys = ('film', 'paper', 'frame')
+        for index, button in enumerate((self._film_tab, self._paper_tab, self._frame_tab)):
             button.setObjectName('modeTab')
             button.setCheckable(True)
             button.setCursor(Qt.PointingHandCursor)
             button.setFixedHeight(26)
-            button.clicked.connect(lambda _checked=False, target=index: self._set_tab('film' if target == 0 else 'paper'))
+            button.clicked.connect(lambda _checked=False, target=tab_keys[index]: self._set_tab(target))
             self._tab_group.addButton(button)
             header.addWidget(button)
         self._film_tab.setChecked(True)
         self._film_tab.setText(f'胶片 {len(self._films)}')
         self._paper_tab.setText(f'相纸 {len(self._papers)}')
+        self._frame_tab.setText(f'边框 {len(self._frames)}')
         header.addStretch(1)
         root.addLayout(header)
 
         self._search_box = QLineEdit()
         self._search_box.setObjectName('presetSearch')
-        self._search_box.setPlaceholderText('搜索胶片或相纸')
+        self._search_box.setPlaceholderText('搜索胶片、相纸或边框')
         self._search_box.setClearButtonEnabled(True)
         self._search_box.setFixedHeight(32)
         self._search_box.addAction(shell_icons.icon('search', TEXT_3, 12), QLineEdit.LeadingPosition)
@@ -248,7 +307,9 @@ class PresetRail(QWidget):
             self._brand_row.addWidget(button)
         self._brand_buttons['全部'].setChecked(True)
         self._brand_row.addStretch(1)
-        root.addLayout(self._brand_row)
+        self._brand_box = QWidget()
+        self._brand_box.setLayout(self._brand_row)
+        root.addWidget(self._brand_box)
 
         self._scroll = DampedScrollArea()
         self._scroll.setObjectName('railScroll')
@@ -268,8 +329,10 @@ class PresetRail(QWidget):
         self._tab = tab
         self._film_tab.setChecked(tab == 'film')
         self._paper_tab.setChecked(tab == 'paper')
+        self._frame_tab.setChecked(tab == 'frame')
         self._brand = '全部'
         self._brand_buttons['全部'].setChecked(True)
+        self._brand_box.setVisible(tab != 'frame')
         self._search = ''
         self._search_box.clear()
         self._rebuild()
@@ -284,8 +347,13 @@ class PresetRail(QWidget):
         self._rebuild()
 
     def _entries(self) -> list[dict[str, str]]:
-        entries = self._films if self._tab == 'film' else self._papers
-        if self._brand != '全部':
+        if self._tab == 'film':
+            entries = self._films
+        elif self._tab == 'paper':
+            entries = self._papers
+        else:
+            entries = self._frames
+        if self._tab != 'frame' and self._brand != '全部':
             entries = [entry for entry in entries if entry['brand'] == self._brand]
         if self._search:
             needle = self._search
@@ -304,14 +372,15 @@ class PresetRail(QWidget):
             if item is not None:
                 widget = item.widget()
                 if widget is not None:
+                    # 先摘出父级，切换 tab 时不会出现旧卡片叠在 new 卡片上的鬼影。
+                    widget.setParent(None)
                     widget.deleteLater()
         self._cards.clear()
 
         entries = self._entries()
         for entry in entries:
-            card = PresetCard(entry, is_paper=self._tab == 'paper')
-            current = self._current_film if self._tab == 'film' else self._current_paper
-            card.set_selected(entry['raw'] == current)
+            card = PresetCard(entry, is_paper=self._tab == 'paper', is_frame=self._tab == 'frame')
+            card.set_selected(entry['raw'] == self._current_preset_key())
             card.selected.connect(self._on_card_selected)
             self._cards[entry['raw']] = card
             self._list_layout.addWidget(card)
@@ -322,21 +391,36 @@ class PresetRail(QWidget):
             self._current_film = raw
             self._refresh_selection()
             self.film_selected.emit(raw)
-        else:
+        elif self._tab == 'paper':
             self._current_paper = raw
             self._refresh_selection()
             self.paper_selected.emit(raw)
+        else:
+            self._current_frame = raw
+            self._refresh_selection()
+            self.frame_selected.emit(raw)
+
+    def _current_preset_key(self) -> str:
+        if self._tab == 'film':
+            return self._current_film
+        if self._tab == 'paper':
+            return self._current_paper
+        return self._current_frame
 
     def _refresh_selection(self) -> None:
-        current = self._current_film if self._tab == 'film' else self._current_paper
+        current = self._current_preset_key()
         for raw, card in self._cards.items():
             card.set_selected(raw == current)
+
+    def set_current_frame(self, frame_raw: str) -> None:
+        self._current_frame = frame_raw or DEFAULT_FRAME_PRESET
+        if self._tab == 'frame':
+            self._refresh_selection()
 
     def set_current(self, film_raw: str, paper_raw: str) -> None:
         self._current_film = film_raw
         self._current_paper = paper_raw
         self._refresh_selection()
-        current = film_raw if self._tab == 'film' else paper_raw
-        card = self._cards.get(current)
+        card = self._cards.get(self._current_preset_key())
         if card is not None:
             self._scroll.ensureWidgetVisible(card, 0, 40)

@@ -699,6 +699,8 @@ class EditorPage(QWidget):
     preview_scale_changed = Signal(float)
     profile_changed = Signal(str, str)
     quick_changed = Signal()
+    frame_selected = Signal(str)
+    frame_changed = Signal()
 
     def __init__(
         self,
@@ -759,8 +761,10 @@ class EditorPage(QWidget):
         self.inspector.reset_requested.connect(self.reset_requested.emit)
         self.inspector.profile_changed.connect(self.profile_changed.emit)
         self.inspector.quick_changed.connect(self.quick_changed.emit)
+        self.inspector.frame_changed.connect(self.frame_changed.emit)
         self.preset_rail.film_selected.connect(self.film_selected.emit)
         self.preset_rail.paper_selected.connect(self.paper_selected.emit)
+        self.preset_rail.frame_selected.connect(self.frame_selected.emit)
         self.filmstrip.item_clicked.connect(self.strip_item_selected.emit)
         self.filmstrip.add_requested.connect(self.add_photos_requested.emit)
         self.preview.set_rotate_callback(self._rotate)
@@ -800,6 +804,19 @@ class EditorPage(QWidget):
             pass
         self.preset_rail.set_current(film, paper)
         self._refresh_chip()
+
+    def set_frame_state(self, raw) -> None:
+        self.inspector.set_frame_state(raw)
+        _enabled, preset = self.inspector.frame_state()
+        self.preset_rail.set_current_frame(preset)
+
+    def frame_state_dict(self) -> dict:
+        enabled, preset = self.inspector.frame_state()
+        return {'enabled': bool(enabled), 'preset': str(preset)}
+
+    def set_frame_preset(self, preset: str) -> None:
+        self.inspector.set_frame_preset(preset)
+        self.preset_rail.set_current_frame(preset)
 
     def set_quick_state(self, raw) -> None:
         self.inspector.set_quick_state(raw)

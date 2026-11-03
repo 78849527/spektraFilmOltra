@@ -203,14 +203,15 @@ def test_real_handoff_loads_preview_and_exports(tmp_path: Path) -> None:
     page.deleteLater()
 
 
-def test_large_handoff_is_downsampled_for_preview(tmp_path: Path) -> None:
+def test_large_handoff_keeps_full_resolution_preview(tmp_path: Path) -> None:
+    """预览不做降采样：调色在后台线程跑，画布按全尺寸渲染才不糊。"""
     app = _app()
     page = GradePage(preset_path=tmp_path / 'presets.json')
     handoff = _handoff(tmp_path / 'large.tif', shape=(1800, 2400))
 
     assert page.load(_item(2400, 1800), handoff, GradeRecipe()) is True
     assert page._preview_source is not None
-    assert max(page._preview_source.shape[:2]) == 1600
+    assert max(page._preview_source.shape[:2]) == 2400
     assert _wait(app, lambda: not page.canvas._pixmap.isNull())
     page.deleteLater()
 

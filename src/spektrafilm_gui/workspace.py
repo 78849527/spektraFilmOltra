@@ -15,6 +15,7 @@ from qtpy import QtCore, QtWidgets
 from spektrafilm_gui import motion
 from spektrafilm_gui.editor_page import EditorPage
 from spektrafilm_gui.export_dialog import edit_export_settings
+from spektrafilm_gui.film_frame import DEFAULT_FRAME_PRESET, preset_by_key
 from spektrafilm_gui.grade_page import GradePage
 from spektrafilm_gui.handoff import (
     handoff_fingerprint,
@@ -102,6 +103,10 @@ class WorkspaceWindow(QMainWindow):
             thumbnails=self.thumbnails,
         )
         self.grade_page = GradePage()
+        self.grade_page.set_display_transform_provider(self._display_transform_enabled)
+        set_frame_provider = getattr(controller, 'set_frame_provider', None)
+        if callable(set_frame_provider):
+            set_frame_provider(self._frame_settings)
         self._stack = QStackedWidget()
         self._stack.addWidget(self.library_page)
         self._stack.addWidget(self.editor_page)
@@ -155,6 +160,8 @@ class WorkspaceWindow(QMainWindow):
         self.editor_page.reset_requested.connect(self._on_reset)
         self.editor_page.film_selected.connect(self._on_film_selected)
         self.editor_page.paper_selected.connect(self._on_paper_selected)
+        self.editor_page.frame_selected.connect(self._on_frame_selected)
+        self.editor_page.frame_changed.connect(self._on_frame_changed)
         self.editor_page.profile_changed.connect(self._on_deck_profile_changed)
         self.editor_page.quick_changed.connect(self._schedule_persist)
         self.editor_page.strip_item_selected.connect(self.open_item)
@@ -215,6 +222,21 @@ class WorkspaceWindow(QMainWindow):
         if callable(sync):
             sync(report_status=False)
 
+    def _display_transform_enabled(self) -> bool:
+        """调色台画布跟随显影台的「使用系统色彩显示」开关。"""
+        try:
+            return bool(self._widgets.display.get_state().use_display_transform)
+        except (AttributeError, TypeError):
+            return False
+
+    def _frame_settings(self) -> tuple[bool, str]:
+        """把右侧栏的边框开关与左侧预设台的选择交给控制器。"""
+        try:
+            state = self.editor_page.frame_state_dict()
+        except (AttributeError, TypeError, ValueError):
+            return True, DEFAULT_FRAME_PRESET
+        return bool(state.get('enabled', True)), str(state.get('preset') or DEFAULT_FRAME_PRESET)
+
     def _request_direct_export(self) -> None:
         request = getattr(self._controller, 'request_direct_export', None)
         if callable(request):
@@ -250,7 +272,7 @@ class WorkspaceWindow(QMainWindow):
             self._show_status('当前版本无法生成调色交接图')
             return
         self._pending_handoff = (item.id, fingerprint, path)
-        if not start(str(path), self._on_handoff_finished):
+        if not start(str(path), self._on_handoff_finished, fingerprint=fingerprint):
             self._pending_handoff = None
             self._show_status('当前无法生成调色交接图')
 
@@ -341,6 +363,7 @@ class WorkspaceWindow(QMainWindow):
         self._widgets.display.set_state(global_display)
         self._widgets.simulation.set_auto_preview_value(global_auto_preview)
         self._sync_display_transform()
+        self._refresh_frame(persist=False)
 
         self._active_item_id = item_id
         self._stack.setCurrentIndex(1)
@@ -349,6 +372,8 @@ class WorkspaceWindow(QMainWindow):
         self.setWindowTitle('Spektrafilm')
         quick_raw = item.state.get('quick') if isinstance(item.state, dict) else None
         self.editor_page.set_quick_state(quick_raw)
+        frame_raw = item.state.get('frame') if isinstance(item.state, dict) else None
+        self.editor_page.set_frame_state(frame_raw)
         display_item = self._display_item(item, state)
         self.editor_page.set_photo(display_item, self._strip_items_for(display_item))
         self.editor_page.set_grade_recipe(has_grade_recipe(item.state))
@@ -429,6 +454,8 @@ class WorkspaceWindow(QMainWindow):
         fingerprint.pop('display', None)
         fingerprint.pop('quick', None)
         fingerprint.pop('grade', None)
+        # 边框是显示层选择（与预览白边同类），不算「照片被调整过」。
+        fingerprint.pop('frame', None)
         simulation = fingerprint.get('simulation')
         if isinstance(simulation, dict):
             for key in ('auto_preview', 'scan_film', 'saving_color_space', 'saving_cctf_encoding'):
@@ -451,6 +478,7 @@ class WorkspaceWindow(QMainWindow):
         state = collect_gui_state(widgets=self._widgets)
         data = gui_state_to_dict(state)
         data['quick'] = self.editor_page.quick_state_dict()
+        data['frame'] = self.editor_page.frame_state_dict()
         existing = self.store.item(self._active_item_id)
         existing_state = existing.state if existing is not None and isinstance(existing.state, dict) else {}
         if isinstance(existing_state.get('grade'), dict):
@@ -536,7 +564,8 @@ class WorkspaceWindow(QMainWindow):
         self.editor_page.set_simulation_busy(False)
         self.editor_page.set_grade_ready(True)
         try:
-            self.editor_page.set_histogram(self._controller.current_output_display_image())
+            # 用未加边框的显示像素做直方图，否则白边/片基会把分布拉偏。
+            self.editor_page.set_histogram(result.display_image)
         except (AttributeError, TypeError, ValueError):
             pass
         self._schedule_persist()
@@ -579,6 +608,21 @@ class WorkspaceWindow(QMainWindow):
         self.editor_page.refresh_after_state_change()
         self._schedule_persist()
         self._show_status(f'已套用 {paper_display_name(raw)}')
+
+    def _on_frame_selected(self, raw: str) -> None:
+        self.editor_page.set_frame_preset(raw)
+        self._refresh_frame()
+        self._show_status(f'边框已切换为 {preset_by_key(raw).name}')
+
+    def _on_frame_changed(self) -> None:
+        self._refresh_frame()
+
+    def _refresh_frame(self, *, persist: bool = True) -> None:
+        apply_frame_state = getattr(self._controller, 'apply_frame_state', None)
+        if callable(apply_frame_state):
+            apply_frame_state()
+        if persist:
+            self._schedule_persist()
 
     def _on_favorite_toggled(self, favorite: bool) -> None:
         if not self._active_item_id:

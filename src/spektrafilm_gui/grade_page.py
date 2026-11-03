@@ -15,6 +15,7 @@ import numpy as np
 from qtpy import QtCore, QtGui, QtWidgets
 
 from spektrafilm_gui import app_paths, motion, shell_icons
+from spektrafilm_gui import controller_runtime as runtime
 from spektrafilm_gui.grade_engine import (
     ToneAnalysis,
     downsample_linear,
@@ -81,8 +82,9 @@ QWidget = QtWidgets.QWidget
 Qt = QtCore.Qt
 Signal = QtCore.Signal
 
-GRADE_PREVIEW_MAX_EDGE = 1600
 GRADE_PREVIEW_DEBOUNCE_MS = 140
+GRADE_PREVIEW_MIN_EDGE = 1600
+GRADE_PREVIEW_MAX_EDGE = 3200
 GRADE_RAIL_WIDTH = 244
 GRADE_DECK_WIDTH = 348
 
@@ -528,32 +530,93 @@ class GradeTopBar(QWidget):
         self._compare.blockSignals(was_blocked)
 
 
+def _apply_display_profile(image: np.ndarray) -> np.ndarray:
+    """sRGB 编码图 → 按显示器 ICC 映射的 uint8；与显影台预览同一条路径。"""
+    array = np.asarray(image, dtype=np.float32)[..., :3]
+    from importlib import import_module
+
+    try:
+        transformed, _status = runtime.prepare_output_display_image(
+            array,
+            output_color_space='sRGB',
+            use_display_transform=True,
+            imagecms_module=import_module('PIL.ImageCms'),
+            colour_module=import_module('colour'),
+            pil_image_module=import_module('PIL.Image'),
+        )
+    except (ImportError, OSError, ValueError, TypeError):
+        return np.uint8(np.clip(array, 0.0, 1.0) * 255.0)
+    return transformed
+
+
 class GradeCanvas(QWidget):
+    resized = Signal()
+
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self.setObjectName('gradeCanvas')
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setStyleSheet(f'QWidget#gradeCanvas {{ background: {SURFACE_0}; }}')
+        self._image: np.ndarray | None = None
+        self._original: np.ndarray | None = None
         self._pixmap = QtGui.QPixmap()
-        self._original = QtGui.QPixmap()
+        self._original_pixmap = QtGui.QPixmap()
         self._message = '正在读取交接图…'
         self._compare = False
+        self._display_transform_provider: Callable[[], bool] = lambda: False
+        self._scaled_key: tuple[int, int, int, float] | None = None
+        self._scaled = QtGui.QPixmap()
+
+    def set_display_transform_provider(self, provider: Callable[[], bool]) -> None:
+        self._display_transform_provider = provider
+        self._rebuild_pixmaps()
+        self.update()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt API name
+        super().resizeEvent(event)
+        self.resized.emit()
+
+    def device_edge(self) -> int:
+        """画布实际可用的设备像素长边：预览按它渲染才是 1:1 清晰。"""
+        ratio = float(self.devicePixelRatioF() or 1.0)
+        rect = self.rect().adjusted(28, 24, -28, -24)
+        return max(int(round(rect.width() * ratio)), int(round(rect.height() * ratio)))
+
+    def _display_enabled(self) -> bool:
+        try:
+            return bool(self._display_transform_provider())
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            return False
+
+    def _build_pixmap(self, image) -> QtGui.QPixmap:
+        if image is None:
+            return QtGui.QPixmap()
+        array = np.asarray(image, dtype=np.float32)[..., :3]
+        if self._display_enabled():
+            array = _apply_display_profile(array)
+        qimage = _qimage_from_array(array)
+        return QtGui.QPixmap.fromImage(qimage) if qimage is not None else QtGui.QPixmap()
+
+    def _rebuild_pixmaps(self) -> None:
+        self._pixmap = self._build_pixmap(self._image)
+        self._original_pixmap = self._build_pixmap(self._original)
+        self._scaled_key = None
 
     def set_image(self, image) -> None:
-        qimage = _qimage_from_array(image)
-        if qimage is None:
-            self._pixmap = QtGui.QPixmap()
-        else:
-            self._pixmap = QtGui.QPixmap.fromImage(qimage)
+        self._image = None if image is None else np.asarray(image, dtype=np.float32)
+        self._pixmap = self._build_pixmap(self._image)
+        self._scaled_key = None
         self._message = ''
         self.update()
 
     def set_original(self, image) -> None:
-        qimage = _qimage_from_array(image)
-        self._original = QtGui.QPixmap.fromImage(qimage) if qimage is not None else QtGui.QPixmap()
+        self._original = None if image is None else np.asarray(image, dtype=np.float32)
+        self._original_pixmap = self._build_pixmap(self._original)
+        self._scaled_key = None
 
     def set_compare(self, compare: bool) -> None:
         self._compare = bool(compare)
+        self._scaled_key = None
         self.update()
 
     def set_message(self, message: str) -> None:
@@ -561,14 +624,17 @@ class GradeCanvas(QWidget):
         self.update()
 
     def clear(self) -> None:
+        self._image = None
+        self._original = None
         self._pixmap = QtGui.QPixmap()
-        self._original = QtGui.QPixmap()
+        self._original_pixmap = QtGui.QPixmap()
+        self._scaled_key = None
         self._message = '等待交接图'
         self.update()
 
     def _active_pixmap(self) -> QtGui.QPixmap:
-        if self._compare and not self._original.isNull():
-            return self._original
+        if self._compare and not self._original_pixmap.isNull():
+            return self._original_pixmap
         return self._pixmap
 
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt API name
@@ -582,9 +648,24 @@ class GradeCanvas(QWidget):
                 painter.setPen(QtGui.QColor(TEXT_4))
                 painter.drawText(rect, Qt.AlignCenter, self._message)
                 return
-            scaled = pixmap.scaled(rect.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            x = rect.left() + (rect.width() - scaled.width()) // 2
-            y = rect.top() + (rect.height() - scaled.height()) // 2
+            # 按设备像素缩放：只缩放到逻辑尺寸的话，Retina/HiDPI 下会被再放大一次，
+            # 画面就会糊。
+            ratio = float(self.devicePixelRatioF() or 1.0)
+            key = (pixmap.cacheKey(), rect.width(), rect.height(), round(ratio, 3))
+            if self._scaled_key != key:
+                target = QtCore.QSize(
+                    max(1, int(round(rect.width() * ratio))),
+                    max(1, int(round(rect.height() * ratio))),
+                )
+                scaled = pixmap.scaled(target, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                scaled.setDevicePixelRatio(ratio)
+                self._scaled = scaled
+                self._scaled_key = key
+            scaled = self._scaled
+            logical_width = int(round(scaled.width() / ratio))
+            logical_height = int(round(scaled.height() / ratio))
+            x = rect.left() + (rect.width() - logical_width) // 2
+            y = rect.top() + (rect.height() - logical_height) // 2
             painter.drawPixmap(x, y, scaled)
         finally:
             painter.end()
@@ -1415,6 +1496,9 @@ class GradePage(QWidget):
         self._item: LibraryItem | None = None
         self._handoff_path = ''
         self._preview_source: np.ndarray | None = None
+        self._preview_cache_edge = 0
+        self._preview_cache_source: np.ndarray | None = None
+        self._rendered_edge = 0
         self._generation = 0
         self._export_generation = 0
         self._preview_busy = False
@@ -1480,6 +1564,7 @@ class GradePage(QWidget):
         self.top_bar.compare_toggled.connect(self.canvas.set_compare)
         self.top_bar.export_requested.connect(self._begin_export)
         self.top_bar.export_settings_requested.connect(self.export_settings_requested.emit)
+        self.canvas.resized.connect(self._on_canvas_resized)
         self.rail.lut_changed.connect(self._on_lut_changed)
         self.rail.preset_selected.connect(self._on_preset_selected)
         self.rail.status_message.connect(self.status_message.emit)
@@ -1523,7 +1608,6 @@ class GradePage(QWidget):
         try:
             image = load_handoff_image(path)
             source = prepare_source(image)
-            preview = downsample_linear(source, GRADE_PREVIEW_MAX_EDGE)
         except Exception as exc:  # noqa: BLE001 - 交接图损坏时必须留在调色台并提示
             self.canvas.clear()
             self.canvas.set_message(f'交接图读取失败：{exc}')
@@ -1532,8 +1616,13 @@ class GradePage(QWidget):
         finally:
             QtWidgets.QApplication.restoreOverrideCursor()
 
-        self._preview_source = np.ascontiguousarray(preview)
-        self.canvas.set_original(srgb_encode(self._preview_source))
+        # 预览只渲染到画布的设备像素尺寸：屏幕上看不出差别，但比全尺寸快一个数量级；
+        # 全尺寸只在导出时渲染。
+        self._preview_source = np.ascontiguousarray(source)
+        self._preview_cache_edge = 0
+        self._preview_cache_source = None
+        preview = self._preview_input()
+        self.canvas.set_original(srgb_encode(preview))
         self.canvas.set_message('正在生成调色预览…')
         self._update_status_text(preview)
         self._start_preview_render()
@@ -1556,6 +1645,10 @@ class GradePage(QWidget):
         self._sync_busy()
 
     # ── 配方 ────────────────────────────────────────────────────
+    def set_display_transform_provider(self, provider: Callable[[], bool]) -> None:
+        """画布按显示器 ICC 显示，才能和显影台预览/导出文件在同一块屏幕上一致。"""
+        self.canvas.set_display_transform_provider(provider)
+
     def recipe(self) -> GradeRecipe:
         return self.deck.current_recipe()
 
@@ -1599,12 +1692,40 @@ class GradePage(QWidget):
         busy = self._preview_busy or self._exporting
         self.top_bar.set_busy(busy)
 
-    def _start_preview_render(self) -> None:
+    def _preview_edge(self) -> int:
+        """预览渲染的长边：= 画布设备像素长边（1:1 上屏），夹在合理范围内。"""
+        edge = int(self.canvas.device_edge())
+        if edge <= 0:
+            edge = GRADE_PREVIEW_MIN_EDGE
+        return max(GRADE_PREVIEW_MIN_EDGE, min(edge, GRADE_PREVIEW_MAX_EDGE))
+
+    def _preview_input(self) -> np.ndarray | None:
+        """按画布尺寸下采样后的线性源；同一档尺寸只算一次。"""
         if self._preview_source is None:
+            return None
+        edge = self._preview_edge()
+        if self._preview_cache_source is not None and self._preview_cache_edge == edge:
+            return self._preview_cache_source
+        self._preview_cache_source = downsample_linear(self._preview_source, edge)
+        self._preview_cache_edge = edge
+        return self._preview_cache_source
+
+    def _on_canvas_resized(self) -> None:
+        """画布尺寸变了（首次布局/窗口缩放）时按新尺寸重渲染一次。"""
+        if self._preview_source is None or self._preview_busy or self._exporting:
+            return
+        if self._preview_edge() == self._rendered_edge:
+            return
+        self._preview_timer.start()
+
+    def _start_preview_render(self) -> None:
+        source = self._preview_input()
+        if source is None:
             return
         self._generation += 1
         generation = self._generation
-        task = GradeRenderTask(generation, self._preview_source, self.deck.current_recipe())
+        self._rendered_edge = self._preview_cache_edge
+        task = GradeRenderTask(generation, source, self.deck.current_recipe())
         task.signals.finished.connect(self._on_preview_finished)
         task.signals.failed.connect(self._on_preview_failed)
         self._preview_busy = True

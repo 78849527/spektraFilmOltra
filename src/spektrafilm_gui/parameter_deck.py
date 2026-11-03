@@ -18,6 +18,7 @@ from typing import Callable
 from qtpy import QtCore, QtGui, QtWidgets
 
 from spektrafilm_gui import motion, shell_icons
+from spektrafilm_gui.film_frame import DEFAULT_FRAME_PRESET, FRAME_PRESETS, preset_by_key
 from spektrafilm_gui.param_manifest import (
     CAMERA_DIFFUSION_MANIFEST,
     CAMERA_MANIFEST,
@@ -351,6 +352,18 @@ QLabel#deckHistogramTitle {{
     color: {TEXT_2}; font-size: 11px; font-weight: 500;
 }}
 QLabel#deckHistogramMeta {{
+    color: {TEXT_3}; font-size: 11px;
+}}
+
+QFrame#deckFrameRow {{
+    background: {SURFACE_2};
+    border: 1px solid {HAIRLINE};
+    border-radius: 12px;
+}}
+QLabel#deckFrameTitle {{
+    color: {TEXT_1}; font-size: 12px; font-weight: 500;
+}}
+QLabel#deckFrameHint {{
     color: {TEXT_3}; font-size: 11px;
 }}
 
@@ -1218,6 +1231,7 @@ class ParameterDeck(QtWidgets.QWidget):
     reset_requested = QtCore.Signal()
     profile_changed = QtCore.Signal(str, str)
     quick_changed = QtCore.Signal()
+    frame_changed = QtCore.Signal()
 
     def __init__(self, widgets, controller, *, parent=None):
         super().__init__(parent)
@@ -1232,6 +1246,7 @@ class ParameterDeck(QtWidgets.QWidget):
         self._mode = 'pro'
         self._quick_engine = QuickEngine()
         self._quick_panel: QuickPanel | None = None
+        self._frame_preset = DEFAULT_FRAME_PRESET
         self._build()
 
     def _build(self) -> None:
@@ -1298,6 +1313,7 @@ class ParameterDeck(QtWidgets.QWidget):
         self._mode_stack.addWidget(self._quick_page)
         self._mode_stack.addWidget(self._pro_page)
         layout.addWidget(self._mode_stack, 1)
+        layout.addWidget(self._build_frame_row())
 
         self._wire_conditions()
         self._update_raw_availability()
@@ -1333,6 +1349,64 @@ class ParameterDeck(QtWidgets.QWidget):
         layout.addLayout(head)
         layout.addWidget(self.histogram)
         return card
+
+    def _build_frame_row(self) -> QtWidgets.QWidget:
+        """右侧栏底部的「添加边框」：默认开启，关掉后预览留白也一起隐藏。"""
+        card = QtWidgets.QFrame()
+        card.setObjectName('deckFrameRow')
+        row = QtWidgets.QHBoxLayout(card)
+        row.setContentsMargins(12, 10, 12, 10)
+        row.setSpacing(10)
+
+        text = QtWidgets.QVBoxLayout()
+        text.setContentsMargins(0, 0, 0, 0)
+        text.setSpacing(2)
+        title = QtWidgets.QLabel('添加边框')
+        title.setObjectName('deckFrameTitle')
+        self._frame_hint = QtWidgets.QLabel('')
+        self._frame_hint.setObjectName('deckFrameHint')
+        text.addWidget(title)
+        text.addWidget(self._frame_hint)
+
+        self._frame_switch = ToggleSwitch()
+        self._frame_switch.setToolTip('关闭后预览窗留白与导出边框都不再显示')
+        self._frame_switch.set_value(True)
+        self._frame_switch.toggled.connect(self._on_frame_toggled)
+
+        row.addLayout(text, 1)
+        row.addWidget(self._frame_switch, 0, Qt.AlignVCenter)
+        self._refresh_frame_hint()
+        return card
+
+    def _refresh_frame_hint(self) -> None:
+        preset = preset_by_key(self._frame_preset)
+        if self._frame_switch.isChecked():
+            self._frame_hint.setText(f'{preset.name} · 预览与导出同步')
+        else:
+            self._frame_hint.setText('已关闭 · 预览留白与导出边框都隐藏')
+
+    def _on_frame_toggled(self, _checked: bool) -> None:
+        self._refresh_frame_hint()
+        self.frame_changed.emit()
+
+    def frame_state(self) -> tuple[bool, str]:
+        return bool(self._frame_switch.isChecked()), self._frame_preset
+
+    def set_frame_state(self, raw: object) -> None:
+        enabled = True
+        preset = DEFAULT_FRAME_PRESET
+        if isinstance(raw, dict):
+            enabled = bool(raw.get('enabled', True))
+            preset = str(raw.get('preset') or DEFAULT_FRAME_PRESET)
+        valid = {item.key for item in FRAME_PRESETS}
+        self._frame_preset = preset if preset in valid else DEFAULT_FRAME_PRESET
+        self._frame_switch.set_value(enabled)
+        self._refresh_frame_hint()
+
+    def set_frame_preset(self, preset: str) -> None:
+        valid = {item.key for item in FRAME_PRESETS}
+        self._frame_preset = preset if preset in valid else DEFAULT_FRAME_PRESET
+        self._refresh_frame_hint()
 
     def _build_page(self, spec) -> QtWidgets.QWidget:
         scroll = QtWidgets.QScrollArea()

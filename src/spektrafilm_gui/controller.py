@@ -14,6 +14,7 @@ from spektrafilm_gui.i18n import tr
 from spektrafilm_gui import controller_persistence as persistence_actions
 from spektrafilm_gui import controller_profile_sync as profile_sync
 from spektrafilm_gui import controller_runtime as runtime
+from spektrafilm_gui.handoff import handoff_fingerprint
 from spektrafilm_gui.input_color import detect_input_color_space
 from spektrafilm_gui.library_store import RAW_SUFFIXES
 from spektrafilm_gui.export_settings import (
@@ -25,8 +26,10 @@ from spektrafilm_gui.export_settings import (
 from spektrafilm_gui.controller_layers import (
     INPUT_LAYER_NAME,
     INPUT_PREVIEW_LAYER_NAME,
+    WHITE_BORDER_LAYER_NAME,
     ViewerLayerService,
 )
+from spektrafilm_gui.film_frame import DEFAULT_FRAME_PRESET, apply_frame
 from spektrafilm_gui.persistence import (
     clear_saved_default_gui_state,
     gui_state_to_dict,
@@ -46,6 +49,7 @@ OUTPUT_FLOAT_DATA_KEY = 'pipeline_float_output'
 OUTPUT_COLOR_SPACE_KEY = 'pipeline_output_color_space'
 OUTPUT_CCTF_ENCODING_KEY = 'pipeline_output_cctf_encoding'
 OUTPUT_DISPLAY_TRANSFORM_KEY = 'pipeline_use_display_transform'
+OUTPUT_DISPLAY_IMAGE_KEY = 'pipeline_display_output'
 PROFILE_SYNC_SECTION_NAMES = profile_sync.PROFILE_SYNC_SECTION_NAMES
 if TYPE_CHECKING:
     import napari
@@ -171,6 +175,7 @@ class GuiController:
             output_color_space_key=OUTPUT_COLOR_SPACE_KEY,
             output_cctf_encoding_key=OUTPUT_CCTF_ENCODING_KEY,
             output_display_transform_key=OUTPUT_DISPLAY_TRANSFORM_KEY,
+            output_display_image_key=OUTPUT_DISPLAY_IMAGE_KEY,
         )
         self._thread_pool = QThreadPool.globalInstance()
         self._active_simulation_worker: runtime.SimulationWorker | None = None
@@ -201,6 +206,11 @@ class GuiController:
         self._export_settings = load_export_settings()
         self._handoff_target_path: Path | None = None
         self._handoff_callback: Callable[..., None] | None = None
+        # 最近一次全尺寸显影对应的状态指纹：交接图优先复用它，
+        # 保证调色台输入与显影台导出是同一份像素（显影含随机颗粒，重跑会变）。
+        self._output_scan_fingerprint: str | None = None
+        # 由前端注入：返回 (是否显示边框, 边框预设 key)。为 None 时保持旧行为。
+        self._frame_provider: Callable[[], tuple[bool, str]] | None = None
 
     def show_startup_placeholder(self) -> None:
         if self._white_border_layer() is not None:
@@ -221,6 +231,7 @@ class GuiController:
             set_active=True,
         )
         self._home_input_stack()
+        self._apply_white_border_layout()
 
     def load_input_image(self, path: str) -> None:
         if Path(path).suffix.lower() in RAW_SUFFIXES:
@@ -235,6 +246,7 @@ class GuiController:
             set_path('')
         image = load_image_oiio(path)[..., :3]
         self._current_input_path = path
+        self._output_scan_fingerprint = None
         self._set_or_add_input_stack(image)
         self._request_auto_preview_if_enabled()
 
@@ -299,6 +311,7 @@ class GuiController:
             return
 
         self._current_input_path = path
+        self._output_scan_fingerprint = None
         self._set_or_add_input_stack(image)
 
         lens_summary = lens_info.get('summary')
@@ -394,12 +407,22 @@ class GuiController:
     def is_simulating(self) -> bool:
         return self._active_simulation_worker is not None
 
-    def start_handoff(self, path: str, callback: Callable[..., None] | None = None) -> bool:
-        """跑一次全尺寸显影，生成调色台交接图；结果不写入预览图层。
+    def start_handoff(
+        self,
+        path: str,
+        callback: Callable[..., None] | None = None,
+        *,
+        fingerprint: str | None = None,
+    ) -> bool:
+        """生成调色台交接图；结果不写入预览图层。
 
         回调签名 ``callback(result, error)``，成功时 error 为 None，
         result.float_image 是 develop 输出色彩空间下的线性 float 输出，
         ``_finish_handoff`` 再把它转成 ProPhoto 线性交接图。
+
+        ``fingerprint`` 是当前显影状态指纹。若最近一次全尺寸显影就是同一状态，
+        直接复用那份像素，保证交接图与显影台导出逐像素同源（显影含随机颗粒，
+        重跑一次会得到不同的颗粒）。
         """
         if self._active_simulation_worker is not None:
             set_status(self._viewer, '显影完成后再调色')
@@ -421,6 +444,9 @@ class GuiController:
         if settings is not None and hasattr(settings, 'preview_mode'):
             settings.preview_mode = False
 
+        if self._reuse_cached_scan(path, output_color_space, fingerprint, callback):
+            return True
+
         request = SimulationRequest(
             mode_label=HANDOFF_MODE_LABEL,
             image=np.double(self._current_input_image),
@@ -432,6 +458,100 @@ class GuiController:
         self._handoff_callback = callback
         self._launch_worker(request, report_status=True)
         return True
+
+    def _reuse_cached_scan(
+        self,
+        path: str,
+        output_color_space: str,
+        fingerprint: str | None,
+        callback: Callable[..., None] | None,
+    ) -> bool:
+        cached = self._cached_full_size_scan(fingerprint, output_color_space)
+        if cached is None:
+            return False
+        error: Exception | None = None
+        try:
+            self._write_handoff_from_encoded(cached, output_color_space, Path(path))
+        except Exception as exc:  # noqa: BLE001 - 写入失败要交给回调
+            error = exc
+        if error is None:
+            set_status(self._viewer, f'交接图已写入 {path}')
+            result: SimulationResult | None = SimulationResult(
+                mode_label=HANDOFF_MODE_LABEL,
+                display_image=cached,
+                float_image=cached,
+                output_color_space=output_color_space,
+                use_display_transform=False,
+                status_message='复用显影台全尺寸结果',
+            )
+        else:
+            result = None
+        if callback is not None:
+            callback(result, error)
+        return True
+
+    def _cached_full_size_scan(self, fingerprint: str | None, output_color_space: str) -> np.ndarray | None:
+        """最近一次全尺寸显影的像素（编码态 float），状态不一致时返回 None。"""
+        if not fingerprint or fingerprint != self._output_scan_fingerprint:
+            return None
+        if self._current_input_image is None:
+            return None
+        image = self._output_layer_float_data()
+        if image is None:
+            return None
+        input_shape = tuple(np.asarray(self._current_input_image).shape[:2])
+        if tuple(np.asarray(image).shape[:2]) != input_shape:
+            return None
+        color_space, cctf_encoding = self._output_layer_render_settings(
+            default_color_space=output_color_space,
+            default_cctf_encoding=True,
+        )
+        if color_space != output_color_space or not cctf_encoding:
+            return None
+        return np.asarray(image)[..., :3]
+
+    def _write_handoff_from_encoded(self, encoded_image: np.ndarray, source_color_space: str, path: Path) -> None:
+        """编码态显影输出 → 线性显影输出 → 交接图。"""
+        linear = np.asarray(
+            colour.RGB_to_RGB(
+                encoded_image,
+                source_color_space,
+                source_color_space,
+                apply_cctf_decoding=True,
+                apply_cctf_encoding=False,
+            ),
+            dtype=np.float32,
+        )
+        self._write_handoff_image(linear, source_color_space, path)
+
+    def _write_handoff_image(self, image: np.ndarray, source_color_space: str, path: Path) -> None:
+        """线性显影输出 → ProPhoto 线性 16-bit 交接图。"""
+        image = np.asarray(image)
+        if source_color_space != HANDOFF_COLOR_SPACE:
+            image = np.asarray(
+                colour.RGB_to_RGB(
+                    image,
+                    source_color_space,
+                    HANDOFF_COLOR_SPACE,
+                    apply_cctf_decoding=False,
+                    apply_cctf_encoding=False,
+                ),
+                dtype=np.float32,
+            )
+        save_image_oiio(
+            str(path),
+            image,
+            bit_depth=16,
+            color_space=HANDOFF_COLOR_SPACE,
+            cctf_encoding=False,
+        )
+
+    def _handoff_state_fingerprint(self) -> str | None:
+        try:
+            state = collect_gui_state(widgets=self._widgets)
+            return handoff_fingerprint(gui_state_to_dict(state))
+        except (AttributeError, KeyError, TypeError, ValueError):
+            return None
 
     def _finish_handoff(self, result: SimulationResult) -> None:
         path = self._handoff_target_path
@@ -445,24 +565,7 @@ class GuiController:
             try:
                 image = np.asarray(result.float_image)
                 source_color_space = str(result.output_color_space or 'sRGB')
-                if source_color_space != HANDOFF_COLOR_SPACE:
-                    image = np.asarray(
-                        colour.RGB_to_RGB(
-                            image,
-                            source_color_space,
-                            HANDOFF_COLOR_SPACE,
-                            apply_cctf_decoding=False,
-                            apply_cctf_encoding=False,
-                        ),
-                        dtype=np.float32,
-                    )
-                save_image_oiio(
-                    str(path),
-                    image,
-                    bit_depth=16,
-                    color_space=HANDOFF_COLOR_SPACE,
-                    cctf_encoding=False,
-                )
+                self._write_handoff_image(image, source_color_space, path)
             except Exception as exc:
                 error = exc
         if error is None:
@@ -632,12 +735,28 @@ class GuiController:
         )
 
     def export_graded_image(self, image: np.ndarray, *, direct: bool = False) -> None:
-        """导出调色台结果：sRGB 编码图，文件名 {name}_graded。"""
+        """导出调色台结果；保存色彩空间与显影台导出同源，文件名 {name}_graded。"""
         data = np.asarray(image, dtype=np.float32)
         if data.ndim != 3 or data.shape[2] < 3:
             QMessageBox.warning(dialog_parent(self._viewer), '导出', '调色结果不是三通道图像。')
             return
         data = np.ascontiguousarray(data[..., :3])
+        # 调色台渲染结果恒为 sRGB 编码；若用户把保存色彩空间改成 P3/AdobeRGB，
+        # 这里必须和显影台导出走同一套转换，否则两份文件不是同一个色彩编码。
+        gui_state = collect_gui_state(widgets=self._widgets)
+        saving_color_space = str(gui_state.simulation.workflow.saving_color_space or 'sRGB')
+        saving_cctf_encoding = bool(gui_state.simulation.workflow.saving_cctf_encoding)
+        if saving_color_space != 'sRGB' or not saving_cctf_encoding:
+            data = np.asarray(
+                colour.RGB_to_RGB(
+                    data,
+                    'sRGB',
+                    saving_color_space,
+                    apply_cctf_decoding=True,
+                    apply_cctf_encoding=saving_cctf_encoding,
+                ),
+                dtype=np.float32,
+            )
         long_edge = max(int(value) for value in data.shape[:2])
         if direct:
             settings = DIRECT_EXPORT_SETTINGS.to_export_settings(long_edge)
@@ -653,7 +772,9 @@ class GuiController:
                 source_metadata = None
         self._export_with_settings(
             settings,
-            payload=(data, 'sRGB', True, source_metadata),
+            payload=(data, saving_color_space, saving_cctf_encoding, source_metadata),
+            # 调色台输出是纯像素，不带显影台的胶片边框。
+            with_frame=False,
         )
 
     def _export_payload_or_warn(self):
@@ -670,6 +791,7 @@ class GuiController:
         settings: ExportSettings,
         *,
         payload=None,
+        with_frame: bool = True,
     ) -> None:
         if payload is None:
             payload = self._export_payload_or_warn()
@@ -679,6 +801,8 @@ class GuiController:
         settings = settings.normalized()
         if settings.long_edge > 0 and max(image_data.shape[:2]) > settings.long_edge:
             image_data = self._resize_for_preview(image_data, max_size=settings.long_edge)
+        if with_frame:
+            image_data = self._framed_display(image_data)
 
         try:
             filepath = self._export_target_path(settings)
@@ -816,6 +940,7 @@ class GuiController:
         if payload is None:
             return
         image_data, saving_color_space, saving_cctf_encoding, source_metadata = payload
+        image_data = self._framed_display(image_data)
 
         try:
             save_image_oiio(
@@ -906,6 +1031,7 @@ class GuiController:
         output_color_space: str,
         output_cctf_encoding: bool,
         use_display_transform: bool,
+        display_image: np.ndarray | None = None,
     ) -> None:
         self._layers.set_or_add_output_layer(
             image,
@@ -914,6 +1040,7 @@ class GuiController:
             output_cctf_encoding=output_cctf_encoding,
             use_display_transform=use_display_transform,
             output_interpolation_mode=self._output_interpolation_mode(),
+            display_image=display_image,
         )
 
     def _set_or_add_input_stack(
@@ -952,11 +1079,89 @@ class GuiController:
             hide_output=hide_output,
             set_active=home_input_stack or self._output_layer() is None,
         )
+        if self._frame_provider is not None:
+            # 预览层已经按显示偏好铺好白边；有边框前端时再决定要不要留白。
+            self._apply_white_border_layout()
         if home_input_stack:
             self._home_input_stack()
 
     def _sync_white_border(self, *, white_padding: float) -> None:
         self._layers.sync_white_border(white_padding=white_padding)
+
+    def set_frame_provider(self, provider: Callable[[], tuple[bool, str]] | None) -> None:
+        self._frame_provider = provider
+
+    def _frame_settings(self) -> tuple[bool, str]:
+        if self._frame_provider is None:
+            # 没有前端注入时保持旧行为：不合成边框、白边照旧。
+            return False, 'none'
+        try:
+            enabled, preset = self._frame_provider()
+        except (AttributeError, TypeError, ValueError):
+            return False, 'none'
+        return bool(enabled), str(preset or DEFAULT_FRAME_PRESET)
+
+    def _frame_padding(self) -> float:
+        try:
+            return float(collect_gui_state(widgets=self._widgets).gui_only.display.white_padding)
+        except (AttributeError, TypeError, ValueError):
+            return 0.03
+
+    def _framed_display(self, image: np.ndarray) -> np.ndarray:
+        enabled, preset = self._frame_settings()
+        if not enabled:
+            return np.asarray(image)
+        return apply_frame(image, preset, padding=self._frame_padding())
+
+    def _apply_white_border_layout(self) -> None:
+        """边框开启时由边框自己提供留白；关闭时用户要求白边也一起隐藏。"""
+        if self._frame_provider is None:
+            # 没有边框前端时保持旧行为：白边仍按显示偏好扩展。
+            try:
+                padding = float(collect_gui_state(widgets=self._widgets).gui_only.display.white_padding)
+            except (AttributeError, TypeError, ValueError):
+                padding = 0.03
+            self._sync_white_border(white_padding=padding)
+            return
+        self._sync_white_border(white_padding=0.0)
+        self._layers.hide_layer(WHITE_BORDER_LAYER_NAME)
+
+    def apply_frame_state(self) -> None:
+        """开关 / 预设变化后只重合成已有输出层，不重跑显影。"""
+        self._apply_white_border_layout()
+        layer = self._output_layer()
+        if layer is None:
+            return
+        source = layer.metadata.get(OUTPUT_DISPLAY_IMAGE_KEY)
+        if source is None:
+            source = np.asarray(layer.data)[..., :3]
+        source = np.asarray(source)
+        current = np.asarray(layer.data)
+        display = self._framed_display(source)
+        if display is current:
+            return
+        if (
+            display.shape == current.shape
+            and display.dtype == current.dtype
+            and bool(np.array_equal(display, current))
+        ):
+            return
+        float_image = self._output_layer_float_data()
+        if float_image is None:
+            float_image = source
+        color_space, cctf_encoding = self._output_layer_render_settings(
+            default_color_space='sRGB',
+            default_cctf_encoding=True,
+        )
+        use_transform = bool(layer.metadata.get(OUTPUT_DISPLAY_TRANSFORM_KEY, False))
+        self._set_or_add_output_layer(
+            display,
+            display_image=source,
+            float_image=float_image,
+            output_color_space=color_space,
+            output_cctf_encoding=cctf_encoding,
+            use_display_transform=use_transform,
+        )
 
     def _home_input_stack(self) -> None:
         if self._white_border_layer() is None:
@@ -1208,7 +1413,7 @@ class GuiController:
             return
 
         state = collect_gui_state(widgets=self._widgets)
-        self._sync_white_border(white_padding=state.gui_only.display.white_padding)
+        self._apply_white_border_layout()
         params = self._configure_simulation_params(
             build_params_from_state(state),
             source_layer_name=source_layer_name,
@@ -1270,13 +1475,18 @@ class GuiController:
         if result.mode_label == 'Preview':
             self._last_preview_fingerprint = self._pending_preview_fingerprint
             self._pending_preview_fingerprint = None
+        display_image = self._framed_display(result.display_image)
         self._set_or_add_output_layer(
-            result.display_image,
+            display_image,
+            display_image=result.display_image,
             float_image=result.float_image,
             output_color_space=result.output_color_space,
             output_cctf_encoding=True,
             use_display_transform=result.use_display_transform,
         )
+        if result.mode_label == 'Scan' and self._result_is_full_size(result):
+            # 记下这份全尺寸显影对应的参数指纹，交接图优先复用它而不是重跑。
+            self._output_scan_fingerprint = self._handoff_state_fingerprint()
         if report_status:
             set_status(self._viewer, f'{tr(result.mode_label)}完成。{result.status_message}')
         for callback in tuple(self._simulation_finished_callbacks):
@@ -1364,7 +1574,7 @@ class GuiController:
             return
 
         state = collect_gui_state(widgets=self._widgets)
-        self._sync_white_border(white_padding=state.gui_only.display.white_padding)
+        self._apply_white_border_layout()
         params = self._configure_simulation_params(
             build_params_from_state(state),
             source_layer_name=source_layer_name,
@@ -1378,7 +1588,8 @@ class GuiController:
             use_display_transform=state.gui_only.display.use_display_transform,
         )
         self._set_or_add_output_layer(
-            scan_display,
+            self._framed_display(scan_display),
+            display_image=scan_display,
             float_image=scan,
             output_color_space=state.simulation.io.output_color_space,
             output_cctf_encoding=True,
