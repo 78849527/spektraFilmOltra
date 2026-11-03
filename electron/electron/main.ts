@@ -112,6 +112,7 @@ async function loadRenderer(window: BrowserWindow): Promise<void> {
 }
 
 async function createWindow(): Promise<void> {
+  const isMac = process.platform === 'darwin'
   mainWindow = new BrowserWindow({
     width: 1460,
     height: 940,
@@ -119,8 +120,9 @@ async function createWindow(): Promise<void> {
     minHeight: 760,
     show: false,
     backgroundColor: '#141311',
-    titleBarStyle: 'hiddenInset',
-    trafficLightPosition: { x: 14, y: 9 },
+    // 自绘顶栏目前只在 macOS 上成立；Windows 先用系统标题栏。
+    titleBarStyle: isMac ? 'hiddenInset' : 'default',
+    trafficLightPosition: isMac ? { x: 14, y: 9 } : undefined,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,

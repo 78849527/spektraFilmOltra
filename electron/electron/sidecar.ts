@@ -19,11 +19,17 @@ function resolvePython(): string {
     return process.env.SPEKTRA_PYTHON
   }
   const repoRoot = path.resolve(__dirname, '..', '..')
-  const candidate = path.join(repoRoot, '.venv', 'bin', 'python')
-  if (existsSync(candidate)) {
-    return candidate
+  const candidates =
+    process.platform === 'win32'
+      ? [
+          path.join(repoRoot, '.venv', 'Scripts', 'python.exe'),
+          path.join(repoRoot, '.venv', 'Scripts', 'python'),
+        ]
+      : [path.join(repoRoot, '.venv', 'bin', 'python')]
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate
   }
-  return 'python3'
+  return process.platform === 'win32' ? 'python' : 'python3'
 }
 
 function resolveRepoRoot(): string {
