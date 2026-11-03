@@ -137,6 +137,10 @@ class Api:
         if method == 'POST' and path == '/v1/grade/luts/remove':
             return 200, self.grade.remove_lut(str(body.get('path') or ''))
 
+        if method == 'POST' and path == '/v1/grade/preview/cancel':
+            self.grade.cancel_preview()
+            return 200, {'ok': True}
+
         if method == 'POST' and path == '/v1/grade/preview':
             job = self.grade.submit_preview(
                 str(body.get('handoff') or ''),

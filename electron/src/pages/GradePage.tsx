@@ -7,6 +7,9 @@ import { Icon } from '../components/Icons'
 import type { Bootstrap, ExportSettings, ItemRecord, PresetEntry, Recipe } from '../types'
 import './pages.css'
 
+const PROXY_EDGE = 800
+const FULL_EDGE = 1600
+
 interface GradePreview {
   path: string
   width: number
@@ -76,45 +79,101 @@ export function GradePage({
   const recipeRef = useRef(recipe)
   recipeRef.current = recipe
 
-  const renderPreview = useCallback(
-    async (nextRecipe: Recipe) => {
-      setBusy(true)
-      try {
-        const { job_id } = await request<{ job_id: string }>('POST', '/v1/grade/preview', {
-          handoff,
-          recipe: nextRecipe,
-          edge: 1600,
-        })
-        const job = await waitForJob(job_id)
-        const result = job.result as unknown as {
-          image_path: string
-          width: number
-          height: number
-          analysis: GradePreview['analysis']
+  const renderSeqRef = useRef(0)
+  const renderChainRef = useRef<Promise<void>>(Promise.resolve())
+  const renderInFlightRef = useRef(false)
+  const cancelSentRef = useRef(false)
+  const proxyTimerRef = useRef<number | null>(null)
+  const settleTimerRef = useRef<number | null>(null)
+
+  const submitPreview = useCallback(
+    (edge: number, nextRecipe: Recipe) => {
+      renderChainRef.current = renderChainRef.current.then(async () => {
+        const seq = ++renderSeqRef.current
+        renderInFlightRef.current = true
+        cancelSentRef.current = false
+        setBusy(true)
+        try {
+          const { job_id } = await request<{ job_id: string }>('POST', '/v1/grade/preview', {
+            handoff,
+            recipe: nextRecipe,
+            edge,
+          })
+          void (async () => {
+            try {
+              const job = await waitForJob(job_id)
+              if (seq !== renderSeqRef.current) return
+              const result = job.result as unknown as {
+                image_path: string
+                width: number
+                height: number
+                analysis: GradePreview['analysis']
+              }
+              if (!result?.image_path) return
+              setPreview({
+                path: result.image_path,
+                width: result.width,
+                height: result.height,
+                analysis: result.analysis,
+              })
+            } catch (error) {
+              if (seq !== renderSeqRef.current) return
+              const message = errorMessage(error)
+              if (!message.includes('取消')) onNotify(message, true)
+            } finally {
+              if (seq === renderSeqRef.current) {
+                renderInFlightRef.current = false
+                setBusy(false)
+              }
+            }
+          })()
+        } catch (error) {
+          if (seq === renderSeqRef.current) {
+            setBusy(false)
+            onNotify(errorMessage(error), true)
+          }
         }
-        if (!result?.image_path) return
-        setPreview({
-          path: result.image_path,
-          width: result.width,
-          height: result.height,
-          analysis: result.analysis,
-        })
-      } catch (error) {
-        const message = errorMessage(error)
-        if (!message.includes('取消')) onNotify(message, true)
-      } finally {
-        setBusy(false)
-      }
+      })
+      return renderChainRef.current
     },
     [handoff, onNotify],
   )
 
   useEffect(() => {
-    const timer = window.setTimeout(() => {
-      void renderPreview(recipeRef.current)
-    }, 120)
-    return () => window.clearTimeout(timer)
-  }, [recipe, handoff, renderPreview])
+    if (renderInFlightRef.current && !cancelSentRef.current) {
+      cancelSentRef.current = true
+      void request('POST', '/v1/grade/preview/cancel', {}).catch(() => undefined)
+    }
+    if (settleTimerRef.current) {
+      window.clearTimeout(settleTimerRef.current)
+      settleTimerRef.current = null
+    }
+    // 交互期用代理图：拖拽过程中每 120ms 最多提交一次，始终取最新配方。
+    if (proxyTimerRef.current === null) {
+      proxyTimerRef.current = window.setTimeout(() => {
+        proxyTimerRef.current = null
+        void submitPreview(PROXY_EDGE, recipeRef.current)
+      }, 120)
+    }
+    settleTimerRef.current = window.setTimeout(() => {
+      settleTimerRef.current = null
+      void submitPreview(FULL_EDGE, recipeRef.current)
+    }, 1100)
+    return () => {
+      if (settleTimerRef.current) {
+        window.clearTimeout(settleTimerRef.current)
+        settleTimerRef.current = null
+      }
+    }
+  }, [recipe, handoff, submitPreview])
+
+  useEffect(
+    () => () => {
+      if (proxyTimerRef.current) window.clearTimeout(proxyTimerRef.current)
+      if (settleTimerRef.current) window.clearTimeout(settleTimerRef.current)
+    },
+    [],
+  )
 
   useEffect(() => {
     ;(async () => {

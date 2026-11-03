@@ -35,6 +35,7 @@ class GradeApi:
         self.presets = GradePresetStore()
         self._session = source_session
         self._source_cache: tuple[str, float, np.ndarray] | None = None
+        self._preview_cache: dict[int, np.ndarray] = {}
 
     # ── 预设与 LUT ──────────────────────────────────────────
     def preset_payload(self) -> dict[str, Any]:
@@ -99,22 +100,33 @@ class GradeApi:
         source = np.ascontiguousarray(prepare_source(image))
         del image
         self._source_cache = (str(path), mtime, source)
+        self._preview_cache = {}
         return source
+
+    def cancel_preview(self) -> None:
+        self.queue.cancel_kind('grade_preview')
 
     def submit_preview(self, handoff_path: str, recipe: dict[str, Any], edge: int = GRADE_PREVIEW_EDGE) -> Job:
         return self.queue.submit(
             'grade_preview',
             lambda job: self.run_preview(job, handoff_path, recipe, edge),
             supersede_kind='grade_preview',
+            initial_label='调色预览…',
         )
 
     def run_preview(self, job: Job, handoff_path: str, recipe: dict[str, Any], edge: int) -> dict[str, Any]:
         self.queue.update_progress(job, '载入交接图', 0, 1)
         source = self._source(handoff_path)
-        width, height = self._preview_shape(source, edge)
+        preview = self._preview_cache.get(edge)
+        if preview is None:
+            preview = downsample_linear(source, edge)
+            self._preview_cache[edge] = preview
         self.queue.update_progress(job, '渲染调色', 1, 2)
-        preview = downsample_linear(source, max(width, height))
-        data, analysis = render(preview, GradeRecipe.from_dict(recipe))
+        data, analysis = render(
+            preview,
+            GradeRecipe.from_dict(recipe),
+            cancel=lambda: self.queue.is_cancelled(job),
+        )
         rgb = np.uint8(np.clip(np.asarray(data), 0.0, 1.0) * 255)
         fingerprint = hashlib.sha1(
             json.dumps({'p': handoff_path, 'r': recipe, 'e': edge}, sort_keys=True, default=str).encode('utf-8')

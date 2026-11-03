@@ -46,6 +46,15 @@ def _prophoto_to_srgb_matrix() -> np.ndarray:
 TRANSPARENCY_EDGE_PERCENT = 0.4
 
 
+class RenderCancelled(Exception):
+    """调色渲染在步骤之间收到取消请求。"""
+
+
+def _check_cancel(cancel) -> None:
+    if cancel is not None and cancel():
+        raise RenderCancelled()
+
+
 @dataclass(frozen=True, slots=True)
 class ToneAnalysis:
     black_point: float
@@ -787,6 +796,7 @@ def render(
     recipe: GradeRecipe,
     *,
     analyze: bool = True,
+    cancel=None,
 ) -> tuple[np.ndarray, ToneAnalysis]:
     """线性 sRGB 源 → (sRGB 编码显示图, 通透分析)。"""
     source = np.asarray(source_linear_srgb, dtype=np.float32)
@@ -794,6 +804,7 @@ def render(
         raise ValueError('调色源必须是三通道图像')
 
     with np.errstate(over='ignore', invalid='ignore', divide='ignore'):
+        _check_cancel(cancel)
         data = source[..., :3]
         data = _apply_exposure_wb(
             data,
@@ -802,7 +813,9 @@ def render(
             recipe.color.tint,
         )
         data = srgb_encode(data)
+        _check_cancel(cancel)
         data = _apply_tone(data, recipe.light)
+        _check_cancel(cancel)
         data = _apply_color(data, recipe.color)
         analysis = analyze_tone(data) if analyze else ToneAnalysis(
             black_point=0.0,
@@ -813,18 +826,23 @@ def render(
             shadow_cast='中性',
             summary='未分析',
         )
+        _check_cancel(cancel)
         data = _apply_transparency(data, recipe.transparency, analysis)
         data = _apply_clarity_structure(data, recipe.quality)
+        _check_cancel(cancel)
         data = _apply_dehaze(data, recipe.quality.dehaze)
         data = _apply_noise_reduction(data, recipe.quality)
+        _check_cancel(cancel)
         data = _apply_sharpening(data, recipe.quality)
         data = _apply_optics(data, recipe.optics)
+        _check_cancel(cancel)
         data = apply_lut(data, recipe.lut.path, recipe.lut.strength)
 
     return _postprocess(data), analysis
 
 
 __all__ = [
+    'RenderCancelled',
     'ToneAnalysis',
     'analyze_tone',
     'apply_lut',
