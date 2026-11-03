@@ -47,7 +47,7 @@ export function EditorPage({
   bootstrap: Bootstrap
   library: LibrarySnapshot
   item: ItemRecord
-  onBack: (updated?: boolean) => void
+  onBack: () => void
   onGrade: (handoff: string) => void
   onSwitchItem: (item: ItemRecord) => void
   onNotify: (message: string, error?: boolean) => void
@@ -145,20 +145,28 @@ export function EditorPage({
   )
 
   const commitAndRender = useCallback(async () => {
-    const snapshot = stateRef.current
-    const key = JSON.stringify(snapshot)
-    const response = await request<{ state: StateTree } & QuickPayload>('POST', '/v1/state', { state: snapshot })
-    setQuick(pickQuick(response))
-    if (JSON.stringify(response.state) !== key) {
-      setState(response.state)
+    try {
+      const snapshot = stateRef.current
+      const key = JSON.stringify(snapshot)
+      const response = await request<{ state: StateTree } & QuickPayload>('POST', '/v1/state', {
+        state: snapshot,
+      })
+      setQuick(pickQuick(response))
+      await saveItem(response.state)
+      if (JSON.stringify(response.state) !== key) {
+        // 换胶片/相纸后后端会重捕基线，等新状态回流再渲染，避免重复出图。
+        setState(response.state)
+        return
+      }
+      const autoPreview = Boolean(readPath(response.state, 'simulation.auto_preview'))
+      if (autoPreview && key !== renderedKeyRef.current) {
+        await renderPreview(scaleRef.current)
+        renderedKeyRef.current = key
+      }
+    } catch (error) {
+      onNotify(errorMessage(error), true)
     }
-    await saveItem(response.state)
-    const autoPreview = Boolean(readPath(response.state, 'simulation.auto_preview'))
-    if (autoPreview && key !== renderedKeyRef.current) {
-      renderedKeyRef.current = key
-      await renderPreview(scaleRef.current)
-    }
-  }, [renderPreview, saveItem])
+  }, [onNotify, renderPreview, saveItem])
 
   useEffect(() => {
     if (!readyRef.current) return
@@ -283,6 +291,16 @@ export function EditorPage({
     onSwitchItem(next)
   }
 
+  async function leaveToLibrary() {
+    try {
+      await request('POST', '/v1/state', { state: stateRef.current })
+      await saveItem(stateRef.current)
+    } catch {
+      // 保存失败也要能回到照片库
+    }
+    onBack()
+  }
+
   const filmsByKind = useMemo(() => {
     const groups = new Map<string, typeof bootstrap.films>()
     for (const film of bootstrap.films) {
@@ -325,7 +343,7 @@ export function EditorPage({
   return (
     <div className="editor-page">
       <header className="editor-topbar">
-        <Button icon="chevronLeft" kind="secondary" height={28} onClick={() => onBack(true)}>
+        <Button icon="chevronLeft" kind="secondary" height={28} onClick={() => void leaveToLibrary()}>
           照片库
         </Button>
 

@@ -133,9 +133,11 @@ export function GradePage({
     try {
       const path = await pickLut()
       if (!path) return
-      const payload = await request<{ luts: LutEntry[] }>('POST', '/v1/grade/luts/import', { path })
+      const payload = await request<{ luts: LutEntry[]; path: string }>('POST', '/v1/grade/luts/import', {
+        path,
+      })
       setLuts(payload.luts)
-      update('lut.path', path)
+      update('lut.path', payload.path)
       onNotify('LUT 已导入')
     } catch (error) {
       onNotify(errorMessage(error), true)

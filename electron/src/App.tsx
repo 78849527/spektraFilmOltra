@@ -97,10 +97,9 @@ export default function App() {
           bootstrap={bootstrap}
           library={library}
           item={route.item}
-          onBack={(updated) => {
+          onBack={() => {
             setRoute({ kind: 'library' })
             void refreshLibrary()
-            if (updated) setLibrary((current) => (current ? { ...current } : current))
           }}
           onGrade={(handoff) => setRoute({ kind: 'grade', item: route.item, handoff })}
           onSwitchItem={(item) => setRoute({ kind: 'editor', item })}
@@ -114,7 +113,11 @@ export default function App() {
           bootstrap={bootstrap}
           item={route.item}
           handoff={route.handoff}
-          onBack={() => setRoute({ kind: 'editor', item: route.item })}
+          onBack={async () => {
+            const snapshot = await refreshLibrary()
+            const fresh = snapshot.items.find((entry) => entry.id === route.item.id) ?? route.item
+            setRoute({ kind: 'editor', item: fresh })
+          }}
           onNotify={notify}
         />
       ) : null}
