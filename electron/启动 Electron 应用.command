@@ -4,7 +4,7 @@ cd "$(dirname "$0")"
 
 if [ ! -d node_modules ]; then
   echo "首次运行，正在安装前端依赖…"
-  npm install --no-audit --no-fund
+  ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ npm install --no-audit --no-fund
 fi
 
 npm run build

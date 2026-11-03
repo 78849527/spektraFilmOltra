@@ -9,6 +9,7 @@ export function Histogram({ src }: { src: string | null }) {
     if (!src) return
     let active = true
     const image = new Image()
+    image.crossOrigin = 'anonymous'
     image.onload = () => {
       if (!active) return
       drawHistogram(image, canvasRef.current)

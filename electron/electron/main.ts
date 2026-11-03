@@ -57,7 +57,13 @@ function registerMediaProtocol(): void {
       return new Response('not found', { status: 404 })
     }
     const stream = Readable.toWeb(createReadStream(raw)) as ReadableStream
-    return new Response(stream, { headers: { 'Content-Type': mimeFor(raw) } })
+    return new Response(stream, {
+      headers: {
+        'Content-Type': mimeFor(raw),
+        'Access-Control-Allow-Origin': '*',
+        'Cache-Control': 'no-store',
+      },
+    })
   })
 }
 
