@@ -376,7 +376,7 @@ export function EditorPage({
     return Array.from(groups.entries())
   }, [bootstrap.films])
 
-  const mediaSrc = preview ? `${mediaUrl(preview.path)}?v=${preview.path.slice(-12)}` : ''
+  const mediaSrc = preview?.path ? `${mediaUrl(preview.path)}?v=${preview.path.slice(-12)}` : ''
   const originalSrc = photo ? `${mediaUrl(photo.original_preview)}?v=compare` : ''
 
   const aspect = photo ? photo.width / photo.height : 4 / 3

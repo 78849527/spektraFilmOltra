@@ -86,7 +86,19 @@ export function GradePage({
           edge: 1600,
         })
         const job = await waitForJob(job_id)
-        setPreview(job.result as unknown as GradePreview)
+        const result = job.result as unknown as {
+          image_path: string
+          width: number
+          height: number
+          analysis: GradePreview['analysis']
+        }
+        if (!result?.image_path) return
+        setPreview({
+          path: result.image_path,
+          width: result.width,
+          height: result.height,
+          analysis: result.analysis,
+        })
       } catch (error) {
         const message = errorMessage(error)
         if (!message.includes('取消')) onNotify(message, true)
@@ -215,7 +227,7 @@ export function GradePage({
   )
 
   const activePresetEntry = presets.find((preset) => preset.id === activePreset)
-  const mediaSrc = preview ? `${mediaUrl(preview.path)}?v=${preview.path.slice(-12)}` : ''
+  const mediaSrc = preview?.path ? `${mediaUrl(preview.path)}?v=${preview.path.slice(-12)}` : ''
 
   return (
     <div className="grade-page">
