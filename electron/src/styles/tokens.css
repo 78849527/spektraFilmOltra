@@ -1,0 +1,50 @@
+:root {
+  --app: #141311;
+  --canvas: #0e0d0b;
+  --surface-1: #191713;
+  --surface-2: #1f1c18;
+  --surface-3: #26231d;
+  --surface-4: #302c25;
+
+  --hairline: rgba(255, 255, 255, 0.055);
+  --hairline-strong: rgba(255, 255, 255, 0.105);
+  --hairline-faint: rgba(255, 255, 255, 0.032);
+  --wash: rgba(255, 255, 255, 0.045);
+  --wash-strong: rgba(255, 255, 255, 0.075);
+
+  --text-1: #f2efe8;
+  --text-2: #b6b0a4;
+  --text-3: #8a8478;
+  --text-4: #605b52;
+
+  --accent: #c5a373;
+  --accent-hover: #d8bb8c;
+  --accent-pressed: #9e7e55;
+  --accent-on: #15120d;
+  --accent-glow: rgba(197, 163, 115, 0.16);
+  --danger: #c0705d;
+
+  --label-red: #c0705e;
+  --label-yellow: #c9a872;
+  --label-green: #7e9b77;
+  --label-blue: #6d8ba7;
+
+  --radius-micro: 4px;
+  --radius-control: 7px;
+  --radius-card: 10px;
+  --radius-panel: 12px;
+  --radius-pill: 13px;
+
+  --chrome-height: 28px;
+  --top-bar-height: 54px;
+  --side-rail: 300px;
+  --inspector: 300px;
+  --filmstrip-height: 96px;
+
+  --motion-hover: 130ms;
+  --motion-state: 180ms;
+  --motion-page: 240ms;
+
+  --font-ui: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei UI', 'Segoe UI', sans-serif;
+  --font-mono: 'SF Mono', 'Consolas', 'Menlo', monospace;
+}

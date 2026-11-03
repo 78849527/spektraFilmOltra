@@ -3,9 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, fields, is_dataclass, replace
 from pathlib import Path
-from typing import Any, cast
-
-from qtpy import QtCore
+from typing import Any
 
 from spektrafilm_gui import app_paths
 from spektrafilm_gui.state import (
@@ -24,8 +22,6 @@ from spektrafilm_gui.state import (
 
 
 DEFAULT_GUI_STATE_FILENAME = "gui_default_state.json"
-QSettings = cast(Any, getattr(QtCore, 'QSettings'))
-QStandardPaths = cast(Any, getattr(QtCore, 'QStandardPaths'))
 
 
 def _copy_section_dict(section: dict[str, Any]) -> dict[str, Any]:
@@ -142,9 +138,15 @@ def _merge_into_dataclass(target: Any, data: Any) -> Any:
     return target
 
 
+def _settings():
+    from qtpy import QtCore
+
+    return QtCore.QSettings('spektrafilm', 'spektrafilm')
+
+
 def load_dialog_dir(key: str) -> str:
-    return QSettings('spektrafilm', 'spektrafilm').value(f'dialog_dirs/{key}', '')
+    return _settings().value(f'dialog_dirs/{key}', '')
 
 
 def save_dialog_dir(key: str, directory: str) -> None:
-    QSettings('spektrafilm', 'spektrafilm').setValue(f'dialog_dirs/{key}', directory)
+    _settings().setValue(f'dialog_dirs/{key}', directory)

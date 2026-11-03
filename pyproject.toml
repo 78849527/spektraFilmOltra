@@ -66,6 +66,8 @@ include = [
     "spektrafilm_gui.*",
     "spektrafilm_lut_creator",
     "spektrafilm_lut_creator.*",
+    "spektrafilm_service",
+    "spektrafilm_service.*",
 ]
 
 [tool.setuptools.package-data]

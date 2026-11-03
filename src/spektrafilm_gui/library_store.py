@@ -19,12 +19,8 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Iterable
 
-from qtpy import QtCore
-
 from spektrafilm_gui import app_paths
 from spektrafilm_gui.persistence import default_gui_state_path
-
-QStandardPaths = getattr(QtCore, 'QStandardPaths')
 
 RAW_SUFFIXES = frozenset({
     '.cr2', '.cr3', '.nef', '.arw', '.dng', '.raf', '.orf', '.rw2', '.pef',

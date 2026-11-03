@@ -23,7 +23,9 @@ pytestmark = pytest.mark.integration
 @pytest.fixture(autouse=True)
 def _no_macos_display_profile(monkeypatch):
     """测试不依赖本机显示器 ICC，统一由用例自己控制 profile 是否存在。"""
-    monkeypatch.setattr(controller_module.runtime, '_macos_display_profile_bytes', lambda: None)
+    from spektrafilm_gui import display_pixels
+
+    monkeypatch.setattr(display_pixels, '_macos_display_profile_bytes', lambda: None)
 
 
 def _make_output_layer(

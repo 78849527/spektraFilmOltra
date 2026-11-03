@@ -197,3 +197,8 @@ uv.lock
 .impeccable/
 build-macos/
 *.dmg
+
+# electron build outputs
+electron/node_modules/
+electron/dist/
+electron/dist-electron/
