@@ -33,40 +33,15 @@ from spektrafilm_gui.grade_recipe import (
 LUMA_REC709 = np.array((0.2126, 0.7152, 0.0722), dtype=np.float32)
 _BAND_CENTERS = np.array(HSL_BAND_HUES, dtype=np.float32)
 
-# ProPhoto RGB (ROMM) → XYZ D50
-_PPRO_TO_XYZ_D50 = np.array(
-    (
-        (0.7976749, 0.1351917, 0.0313534),
-        (0.2880402, 0.7118741, 0.0000857),
-        (0.0000000, 0.0000000, 0.8252100),
-    ),
-    dtype=np.float64,
-)
+@lru_cache(maxsize=1)
+def _prophoto_to_srgb_matrix() -> np.ndarray:
+    """线性 ProPhoto → 线性 sRGB；与 develop 预览使用同一套 colour 转换。"""
+    import colour
 
-# Bradford 色适应：XYZ D50 → XYZ D65
-_XYZ_D50_TO_XYZ_D65 = np.array(
-    (
-        (0.9555766, -0.0230393, 0.0631636),
-        (-0.0282895, 1.0099416, 0.0210077),
-        (0.0122982, -0.0204830, 1.3299098),
-    ),
-    dtype=np.float64,
-)
-
-# 线性 sRGB → XYZ D65
-_SRGB_TO_XYZ_D65 = np.array(
-    (
-        (0.4124564, 0.3575761, 0.1804375),
-        (0.2126729, 0.7151522, 0.0721750),
-        (0.0193339, 0.1191920, 0.9503041),
-    ),
-    dtype=np.float64,
-)
-
-# 一次性把三段时间合成：线性 ProPhoto → 线性 sRGB
-PPRO_TO_LINEAR_SRGB = (
-    np.linalg.inv(_SRGB_TO_XYZ_D65) @ _XYZ_D50_TO_XYZ_D65 @ _PPRO_TO_XYZ_D50
-).astype(np.float32)
+    return np.asarray(
+        colour.matrix_RGB_to_RGB('ProPhoto RGB', 'sRGB'),
+        dtype=np.float32,
+    )
 
 TRANSPARENCY_EDGE_PERCENT = 0.4
 
@@ -107,9 +82,12 @@ def srgb_decode(encoded: np.ndarray) -> np.ndarray:
 def prepare_source(prophoto_linear: np.ndarray) -> np.ndarray:
     """线性 ProPhoto float → 线性 sRGB float32。"""
     image = np.asarray(prophoto_linear, dtype=np.float32)[..., :3]
-    return np.einsum('...c,dc->...d', image, PPRO_TO_LINEAR_SRGB, optimize=True).astype(
-        np.float32,
-    )
+    return np.einsum(
+        '...c,dc->...d',
+        image,
+        _prophoto_to_srgb_matrix(),
+        optimize=True,
+    ).astype(np.float32)
 
 
 def load_handoff_image(path: str | Path) -> np.ndarray:
@@ -159,13 +137,14 @@ def downsample_linear(image: np.ndarray, max_long_edge: int) -> np.ndarray:
     scale = float(max_long_edge) / float(longest)
     new_height = max(1, int(round(height * scale)))
     new_width = max(1, int(round(width * scale)))
+    # scikit-image 0.26 移除了 channel_axis；输入/输出通道数相同（3）时
+    # resize 会把最后一维当通道，只需给出二维输出尺寸加上通道维。
     resized = resize(
         data,
         (new_height, new_width, 3),
         order=1,
         preserve_range=True,
         anti_aliasing=True,
-        channel_axis=2,
     )
     return np.asarray(resized, dtype=np.float32)
 
@@ -846,7 +825,6 @@ def render(
 
 
 __all__ = [
-    'PPRO_TO_LINEAR_SRGB',
     'ToneAnalysis',
     'analyze_tone',
     'apply_lut',

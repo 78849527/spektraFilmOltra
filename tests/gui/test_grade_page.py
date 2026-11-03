@@ -30,9 +30,9 @@ def _wait(app: QtWidgets.QApplication, predicate, timeout: float = 5.0) -> bool:
     return False
 
 
-def _handoff(path: Path) -> Path:
+def _handoff(path: Path, shape: tuple[int, int] = (120, 160)) -> Path:
     rng = np.random.default_rng(0)
-    image = (rng.random((120, 160, 3)) * 0.7).astype(np.float32)
+    image = (rng.random((*shape, 3)) * 0.7).astype(np.float32)
     save_image_oiio(
         str(path),
         image,
@@ -200,6 +200,18 @@ def test_real_handoff_loads_preview_and_exports(tmp_path: Path) -> None:
     assert image.shape[2] == 3
     assert image.dtype == np.float32
     assert np.isfinite(image).all()
+    page.deleteLater()
+
+
+def test_large_handoff_is_downsampled_for_preview(tmp_path: Path) -> None:
+    app = _app()
+    page = GradePage(preset_path=tmp_path / 'presets.json')
+    handoff = _handoff(tmp_path / 'large.tif', shape=(1800, 2400))
+
+    assert page.load(_item(2400, 1800), handoff, GradeRecipe()) is True
+    assert page._preview_source is not None
+    assert max(page._preview_source.shape[:2]) == 1600
+    assert _wait(app, lambda: not page.canvas._pixmap.isNull())
     page.deleteLater()
 
 

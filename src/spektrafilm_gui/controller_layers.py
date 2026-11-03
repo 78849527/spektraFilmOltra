@@ -41,6 +41,21 @@ OUTPUT_LAYER_ANIMATION_MAX_PIXELS = 1_500_000
 WATERMARK_LONG_EDGE_PIXELS = 1024
 
 
+def _lock_contrast_limits(layer) -> None:
+    """预览必须按绝对像素值显示。
+
+    napari 对浮点数据默认用 ``[min, max]`` 当对比度上下限并拉伸到满量程，
+    而导出写的是绝对像素值 —— 两者就会一明一暗。这里按数据类型锁定满量程：
+    uint8 是 0..255，浮点是 0..1。
+    """
+    data = np.asarray(layer.data)
+    if np.issubdtype(data.dtype, np.integer):
+        upper = float(np.iinfo(data.dtype).max)
+    else:
+        upper = 1.0
+    layer.contrast_limits = (0.0, upper)
+
+
 def virtual_photo_paper_back(*args, **kwargs):
     return import_module('spektrafilm_gui.virtual_photo_paper_back').virtual_photo_paper_back(*args, **kwargs)
 
@@ -407,6 +422,7 @@ class ViewerLayerService:
             output_display_transform_key=self.output_display_transform_key,
         )
         set_output_layer_interpolation(layer, output_interpolation_mode)
+        _lock_contrast_limits(layer)
         image_world_size = self.current_image_world_size()
         if image_world_size is not None:
             _set_layer_geometry(layer, world_size=_fit_image_world_size(np.asarray(image), bounding_world_size=image_world_size))
@@ -469,8 +485,11 @@ class ViewerLayerService:
     def _set_or_add_image_layer(self, image: np.ndarray, *, layer_name: str) -> NapariImageLayer:
         existing_layer = self.image_layer(layer_name)
         if existing_layer is None:
-            return self.viewer.add_image(image, name=layer_name)
+            layer = self.viewer.add_image(image, name=layer_name)
+            _lock_contrast_limits(layer)
+            return layer
         _set_layer_data(existing_layer, image)
+        _lock_contrast_limits(existing_layer)
         return existing_layer
 
     def _ensure_stack_order(self) -> None:

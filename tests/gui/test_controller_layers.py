@@ -31,6 +31,34 @@ def _make_service(viewer: FakeViewer) -> ViewerLayerService:
     )
 
 
+def test_output_layer_contrast_limits_are_locked() -> None:
+    """预览必须按绝对像素值显示，不能被 napari 的自动 min/max 拉伸。"""
+    viewer = FakeViewer()
+    service = _make_service(viewer)
+
+    dark = np.full((8, 8, 3), 0.4, dtype=np.float32)
+    service.set_or_add_output_layer(
+        dark,
+        float_image=dark,
+        output_color_space='sRGB',
+        output_cctf_encoding=True,
+        use_display_transform=False,
+    )
+    layer = service.output_layer()
+    assert layer is not None
+    assert tuple(layer.contrast_limits) == (0.0, 1.0)
+
+    bright = np.full((8, 8, 3), 0.9, dtype=np.float32)
+    service.set_or_add_output_layer(
+        bright,
+        float_image=bright,
+        output_color_space='sRGB',
+        output_cctf_encoding=True,
+        use_display_transform=False,
+    )
+    assert tuple(layer.contrast_limits) == (0.0, 1.0)
+
+
 class VisibilityTrackingLayer:
     def __init__(self, data: np.ndarray | None = None, *, name: str = 'layer', visible: bool = True) -> None:
         self.name = name

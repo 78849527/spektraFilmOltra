@@ -9,6 +9,7 @@ from spektrafilm_gui import handoff as handoff_module
 from spektrafilm_gui.grade_recipe import GradeRecipe
 from spektrafilm_gui.handoff import (
     HANDOFF_FORMAT,
+    HANDOFF_VERSION,
     handoff_fingerprint,
     handoff_is_current,
     handoff_path,
@@ -81,6 +82,7 @@ def test_write_handoff_merges_and_preserves_recipe(tmp_path: Path) -> None:
 
     assert updated['grade']['recipe'] == recipe
     assert handoff == {
+        'version': HANDOFF_VERSION,
         'path': str(target),
         'fingerprint': 'abc',
         'width': 640,
@@ -100,6 +102,15 @@ def test_handoff_is_current_checks_fingerprint_and_file(tmp_path: Path) -> None:
     assert handoff_is_current(state, 'abc') is True
     assert handoff_is_current(state, 'other') is False
     assert handoff_is_current(_state(), 'abc') is False
+
+
+def test_handoff_is_current_rejects_legacy_version(tmp_path: Path) -> None:
+    target = tmp_path / 'handoff.tif'
+    target.write_bytes(b'x')
+    state = write_handoff(_state(), path=target, fingerprint='abc')
+    legacy = copy.deepcopy(state)
+    legacy['grade']['handoff']['version'] = 1
+    assert handoff_is_current(legacy, 'abc') is False
 
 
 def test_handoff_alone_is_not_a_grade_recipe() -> None:

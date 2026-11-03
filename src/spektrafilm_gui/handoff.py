@@ -20,6 +20,7 @@ from spektrafilm_gui import app_paths
 from spektrafilm_gui.grade_recipe import GradeRecipe
 
 SCHEMA_VERSION = 1
+HANDOFF_VERSION = 2
 HANDOFF_FORMAT = 'tiff16-prophoto-linear'
 HANDOFF_FILENAME = 'handoff.tif'
 
@@ -84,6 +85,12 @@ def handoff_is_current(state_data: Mapping[str, Any] | None, fingerprint: str) -
     handoff = read_handoff(state_data)
     if not handoff:
         return False
+    try:
+        version = int(handoff.get('version') or 0)
+    except (TypeError, ValueError):
+        version = 0
+    if version != HANDOFF_VERSION:
+        return False
     if str(handoff.get('fingerprint') or '') != str(fingerprint):
         return False
     path = Path(str(handoff.get('path') or ''))
@@ -103,6 +110,7 @@ def write_handoff(
     grade = _grade_section(data)
     grade['schema'] = _grade_schema(grade)
     grade['handoff'] = {
+        'version': HANDOFF_VERSION,
         'path': str(path),
         'fingerprint': str(fingerprint),
         'width': int(width),
@@ -146,6 +154,7 @@ def write_grade_recipe(
 __all__ = [
     'HANDOFF_FILENAME',
     'HANDOFF_FORMAT',
+    'HANDOFF_VERSION',
     'SCHEMA_VERSION',
     'handoff_fingerprint',
     'handoff_is_current',

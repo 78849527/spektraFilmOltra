@@ -9,6 +9,7 @@ from qtpy import QtWidgets
 from spektrafilm_gui import controller as controller_module
 from spektrafilm_gui.controller import GuiController, HANDOFF_MODE_LABEL
 from spektrafilm_gui.export_settings import ExportSettings
+from spektrafilm_gui.grade_engine import prepare_source
 from spektrafilm.utils.io import load_image_oiio
 
 import OpenImageIO as oiio
@@ -61,7 +62,7 @@ def test_start_handoff_writes_16bit_prophoto_linear(tmp_path, monkeypatch) -> No
     assert started is True
     assert errors == [None]
     assert results and results[0].mode_label == HANDOFF_MODE_LABEL
-    assert params.io.output_color_space == 'ProPhoto RGB'
+    assert params.io.output_color_space == 'sRGB'
     assert params.io.output_cctf_encoding is False
     assert params.settings.preview_mode is False
 
@@ -75,6 +76,43 @@ def test_start_handoff_writes_16bit_prophoto_linear(tmp_path, monkeypatch) -> No
     image_input.close()
     assert spec.format == oiio.UINT16
     assert spec.getattribute('ICCProfile') is not None
+
+
+def test_handoff_roundtrips_develop_output_colors(tmp_path, monkeypatch) -> None:
+    _app()
+    controller = GuiController(viewer=object(), widgets=object())
+    controller._current_input_image = np.ones((4, 4, 3), dtype=np.float32)
+    controller._thread_pool = _SyncPool()
+    params = SimpleNamespace(
+        io=SimpleNamespace(output_color_space='sRGB', output_cctf_encoding=True),
+        settings=SimpleNamespace(preview_mode=True),
+    )
+    monkeypatch.setattr(controller_module, 'collect_gui_state', lambda *, widgets: object())
+    monkeypatch.setattr(controller_module, 'build_params_from_state', lambda state: params)
+
+    color = np.array((0.80, 0.05, 0.02), dtype=np.float32)
+
+    def fake_process(_image, _params, **_kwargs):
+        return np.broadcast_to(color, (4, 4, 3)).copy()
+
+    monkeypatch.setattr(controller, '_process_image_with_runtime', fake_process)
+    monkeypatch.setattr(
+        controller,
+        '_prepare_output_display_image',
+        lambda image, **kwargs: (np.zeros((4, 4, 3), dtype=np.uint8), 'ok'),
+    )
+    monkeypatch.setattr(controller_module, 'set_status', lambda *args, **kwargs: None)
+
+    target = tmp_path / 'handoff.tif'
+    results: list[object] = []
+    errors: list[object] = []
+    assert controller.start_handoff(str(target), lambda result, error: (results.append(result), errors.append(error))) is True
+    assert errors == [None]
+    assert results
+
+    saved = load_image_oiio(str(target))
+    recovered = prepare_source(saved)
+    assert np.allclose(recovered[0, 0], color, atol=2e-3)
 
 
 def test_start_handoff_refuses_while_simulating(monkeypatch) -> None:

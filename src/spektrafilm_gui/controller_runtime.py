@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import io
+import platform
+import subprocess
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable
 
@@ -9,6 +13,10 @@ from qtpy import QtCore
 
 
 DISPLAY_PREVIEW_COLOR_SPACE = 'sRGB'
+DISPLAY_PROFILE_DIRS = (
+    '/Library/ColorSync/Profiles/Displays',
+    str(Path.home() / 'Library/ColorSync/Profiles/Displays'),
+)
 QObject = getattr(QtCore, 'QObject')
 QRunnable = getattr(QtCore, 'QRunnable')
 Signal = getattr(QtCore, 'Signal')
@@ -113,21 +121,85 @@ def display_profile_name(display_profile: object, *, imagecms_module: Any) -> st
     return type(display_profile).__name__
 
 
-def display_profile_details(*, imagecms_module: Any) -> tuple[object | None, str | None]:
+@lru_cache(maxsize=1)
+def _macos_main_display_model() -> str:
+    """读取主显示器型号（system_profiler），失败时返回空串。"""
+    if platform.system() != 'Darwin':
+        return ''
     try:
-        display_profile = imagecms_module.get_display_profile()
-    except (OSError, ValueError, TypeError, imagecms_module.PyCMSError):
-        return None, None
+        completed = subprocess.run(
+            ['system_profiler', 'SPDisplaysDataType'],
+            capture_output=True,
+            text=True,
+            timeout=8,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ''
+    model = ''
+    for line in completed.stdout.splitlines():
+        text = line.strip()
+        if line.startswith(' ' * 8) and not line.startswith(' ' * 9) and text.endswith(':'):
+            model = text[:-1]
+            continue
+        if model and text.startswith('Main Display:') and 'Yes' in text:
+            return model
+    return ''
+
+
+@lru_cache(maxsize=1)
+def _macos_display_profile_bytes() -> bytes | None:
+    """macOS 上 Pillow 拿不到显示器 ICC，于是按主显示器型号匹配 ColorSync 里的配置。"""
+    model = _macos_main_display_model()
+    if not model:
+        return None
+    candidates: list[Path] = []
+    for folder in DISPLAY_PROFILE_DIRS:
+        try:
+            entries = tuple(Path(folder).iterdir())
+        except OSError:
+            continue
+        for entry in entries:
+            if entry.suffix.lower() != '.icc':
+                continue
+            if entry.name.startswith(f'{model}-'):
+                candidates.append(entry)
+    if not candidates:
+        return None
+    try:
+        newest = max(candidates, key=lambda path: path.stat().st_mtime)
+        return newest.read_bytes()
+    except OSError:
+        return None
+
+
+def _system_display_profile(*, imagecms_module: Any) -> object | None:
+    try:
+        profile = imagecms_module.get_display_profile()
+    except (AttributeError, OSError, ValueError, TypeError, imagecms_module.PyCMSError):
+        profile = None
+    if profile is not None:
+        return profile
+
+    profile_factory = getattr(imagecms_module, 'ImageCmsProfile', None)
+    raw = _macos_display_profile_bytes()
+    if profile_factory is None or raw is None:
+        return None
+    try:
+        return profile_factory(io.BytesIO(raw))
+    except (AttributeError, OSError, ValueError, TypeError, imagecms_module.PyCMSError):
+        return None
+
+
+def display_profile_details(*, imagecms_module: Any) -> tuple[object | None, str | None]:
+    display_profile = _system_display_profile(imagecms_module=imagecms_module)
     if display_profile is None:
         return None, None
     return display_profile, display_profile_name(display_profile, imagecms_module=imagecms_module)
 
 
 def display_profile_available(*, imagecms_module: Any) -> bool:
-    try:
-        return imagecms_module.get_display_profile() is not None
-    except (OSError, ValueError, TypeError, imagecms_module.PyCMSError):
-        return False
+    return _system_display_profile(imagecms_module=imagecms_module) is not None
 
 
 def display_transform_status_message(enabled: bool, *, imagecms_module: Any) -> str:

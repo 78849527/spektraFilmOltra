@@ -209,6 +209,12 @@ class WorkspaceWindow(QMainWindow):
         self.setWindowTitle('Spektrafilm')
         self._show_status('显影台')
 
+    def _sync_display_transform(self) -> None:
+        """预览必须按显示器 ICC 显示，才能和导出文件在 macOS 里的观感一致。"""
+        sync = getattr(self._controller, 'sync_display_transform_availability', None)
+        if callable(sync):
+            sync(report_status=False)
+
     def _request_direct_export(self) -> None:
         request = getattr(self._controller, 'request_direct_export', None)
         if callable(request):
@@ -334,6 +340,7 @@ class WorkspaceWindow(QMainWindow):
             apply_gui_state(PROJECT_DEFAULT_GUI_STATE, widgets=self._widgets)
         self._widgets.display.set_state(global_display)
         self._widgets.simulation.set_auto_preview_value(global_auto_preview)
+        self._sync_display_transform()
 
         self._active_item_id = item_id
         self._stack.setCurrentIndex(1)
@@ -609,6 +616,7 @@ class WorkspaceWindow(QMainWindow):
         apply_gui_state(load_default_gui_state(), widgets=self._widgets)
         self._widgets.display.set_state(global_display)
         self._widgets.simulation.set_auto_preview_value(global_auto_preview)
+        self._sync_display_transform()
         self.editor_page.reset_quick_state()
         self.editor_page.refresh_after_state_change()
         self._schedule_persist()

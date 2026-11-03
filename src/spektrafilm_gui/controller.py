@@ -398,7 +398,8 @@ class GuiController:
         """跑一次全尺寸显影，生成调色台交接图；结果不写入预览图层。
 
         回调签名 ``callback(result, error)``，成功时 error 为 None，
-        result.float_image 是 ProPhoto RGB 线性 float 输出。
+        result.float_image 是 develop 输出色彩空间下的线性 float 输出，
+        ``_finish_handoff`` 再把它转成 ProPhoto 线性交接图。
         """
         if self._active_simulation_worker is not None:
             set_status(self._viewer, '显影完成后再调色')
@@ -412,7 +413,9 @@ class GuiController:
         io_params = getattr(params, 'io', None)
         if io_params is None:
             return False
-        io_params.output_color_space = HANDOFF_COLOR_SPACE
+        # 交接图必须复用 develop 的输出色彩空间与输出 gamut 压缩结果；
+        # 否则显影台看到的 sRGB 压缩画面和交接图的宽色域原始值会对不上。
+        output_color_space = str(io_params.output_color_space or 'sRGB')
         io_params.output_cctf_encoding = False
         settings = getattr(params, 'settings', None)
         if settings is not None and hasattr(settings, 'preview_mode'):
@@ -422,7 +425,7 @@ class GuiController:
             mode_label=HANDOFF_MODE_LABEL,
             image=np.double(self._current_input_image),
             params=params,
-            output_color_space=HANDOFF_COLOR_SPACE,
+            output_color_space=output_color_space,
             use_display_transform=False,
         )
         self._handoff_target_path = Path(path)
@@ -440,9 +443,22 @@ class GuiController:
             error = ValueError('缺少交接图目标路径')
         else:
             try:
+                image = np.asarray(result.float_image)
+                source_color_space = str(result.output_color_space or 'sRGB')
+                if source_color_space != HANDOFF_COLOR_SPACE:
+                    image = np.asarray(
+                        colour.RGB_to_RGB(
+                            image,
+                            source_color_space,
+                            HANDOFF_COLOR_SPACE,
+                            apply_cctf_decoding=False,
+                            apply_cctf_encoding=False,
+                        ),
+                        dtype=np.float32,
+                    )
                 save_image_oiio(
                     str(path),
-                    np.asarray(result.float_image),
+                    image,
                     bit_depth=16,
                     color_space=HANDOFF_COLOR_SPACE,
                     cctf_encoding=False,
@@ -547,6 +563,10 @@ class GuiController:
 
     def sync_display_transform_availability(self, *, report_status: bool) -> bool:
         if runtime.display_profile_available(imagecms_module=ImageCms):
+            if not report_status:
+                # 启动时恢复系统色彩管理：预览按显示器 ICC 映射，
+                # 这样屏幕上看到的画面和导出文件在 macOS 里显示的完全一致。
+                self._set_display_transform_checked(True)
             return True
 
         self._set_display_transform_checked(False)

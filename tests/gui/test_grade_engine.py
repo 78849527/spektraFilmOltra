@@ -7,6 +7,7 @@ import numpy as np
 from spektrafilm_gui.grade_engine import (
     analyze_tone,
     apply_lut,
+    downsample_linear,
     parse_cube,
     prepare_source,
     render,
@@ -23,6 +24,46 @@ def _source(seed: int = 0, shape: tuple[int, int] = (64, 96)) -> np.ndarray:
 
 def _mean(image: np.ndarray) -> float:
     return float(np.mean(image))
+
+
+def test_prepare_source_matches_develop_colour_conversion() -> None:
+    import colour
+
+    prophoto = np.random.default_rng(10).random((32, 32, 3)).astype(np.float32)
+    ours = prepare_source(prophoto)
+    reference = np.asarray(
+        colour.RGB_to_RGB(
+            prophoto,
+            'ProPhoto RGB',
+            'sRGB',
+            apply_cctf_decoding=False,
+            apply_cctf_encoding=False,
+        ),
+        dtype=np.float32,
+    )
+    assert np.allclose(ours, reference, atol=1e-5)
+
+
+def test_downsample_linear_resizes_large_images_and_preserves_color() -> None:
+    image = np.zeros((1800, 2400, 3), dtype=np.float32)
+    image[..., 0] = 0.6
+    image[..., 1] = 0.3
+    image[..., 2] = 0.1
+
+    result = downsample_linear(image, 1600)
+
+    assert result.shape == (1200, 1600, 3)
+    assert result.dtype == np.float32
+    assert np.allclose(result[..., 0], 0.6, atol=0.01)
+    assert np.allclose(result[..., 1], 0.3, atol=0.01)
+    assert np.allclose(result[..., 2], 0.1, atol=0.01)
+
+
+def test_downsample_linear_keeps_small_images_untouched() -> None:
+    image = np.zeros((120, 160, 3), dtype=np.float32)
+    result = downsample_linear(image, 1600)
+    assert result.shape == image.shape
+    assert np.array_equal(result, image)
 
 
 def test_default_recipe_matches_plain_color_conversion() -> None:
