@@ -9,10 +9,12 @@ export function ExportDialog({
   initial,
   onClose,
   onConfirm,
+  notice,
 }: {
   initial: ExportSettings
   onClose: () => void
   onConfirm: (settings: ExportSettings) => void
+  notice?: string | null
 }) {
   const [settings, setSettings] = useState<ExportSettings>({ ...initial })
 
@@ -107,6 +109,11 @@ export function ExportDialog({
           <div className="micro" style={{ marginTop: 8 }}>
             可用变量：{'{name}'} 原文件名 · {'{film}'} 胶片 · {'{paper}'} 相纸
           </div>
+          {notice ? (
+            <div className="micro" style={{ marginTop: 10, color: '#c08a2e' }}>
+              {notice}
+            </div>
+          ) : null}
         </div>
         <div className="modal-foot">
           <Button kind="secondary" onClick={onClose}>

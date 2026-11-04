@@ -13,7 +13,7 @@ from spektrafilm_gui.grade_engine import (
     render,
     srgb_encode,
 )
-from spektrafilm_gui.grade_recipe import GradeRecipe, HslBand
+from spektrafilm_gui.grade_recipe import GradeRecipe, HslBand, LightRecipe
 
 
 def _source(seed: int = 0, shape: tuple[int, int] = (64, 96)) -> np.ndarray:
@@ -248,3 +248,30 @@ def test_apply_lut_strength_and_missing_file_are_safe(tmp_path: Path) -> None:
     assert np.allclose(half, image, atol=0.02)
     missing = apply_lut(image, str(tmp_path / 'missing.cube'), 100.0)
     assert np.array_equal(missing, image)
+
+
+def test_point_curve_lifts_midtones_without_tinting() -> None:
+    from spektrafilm_gui.grade_engine import _apply_parametric_curve
+
+    image = np.full((16, 16, 3), 0.5, dtype=np.float32)
+    light = LightRecipe(curve=((0.0, 0.0), (0.5, 0.7), (1.0, 1.0)))
+    out = _apply_parametric_curve(image, light)
+
+    assert float(np.mean(out)) > float(np.mean(image))
+    assert np.allclose(out[..., 0], out[..., 1], atol=1e-6)
+    assert np.allclose(out[..., 1], out[..., 2], atol=1e-6)
+
+
+def test_point_curve_identity_returns_input() -> None:
+    from spektrafilm_gui.grade_engine import _apply_parametric_curve
+
+    image = np.full((8, 8, 3), 0.4, dtype=np.float32)
+    out = _apply_parametric_curve(image, LightRecipe(curve=((0.0, 0.0), (1.0, 1.0))))
+    assert np.allclose(out, image)
+
+def test_point_curve_lifts_black_from_zero() -> None:
+    from spektrafilm_gui.grade_engine import _apply_parametric_curve
+
+    image = np.zeros((8, 8, 3), dtype=np.float32)
+    out = _apply_parametric_curve(image, LightRecipe(curve=((0.0, 0.1), (1.0, 1.0))))
+    assert np.allclose(out, 0.1, atol=1e-5)

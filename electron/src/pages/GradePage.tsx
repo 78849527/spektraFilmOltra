@@ -102,7 +102,7 @@ export function GradePage({
   const recipeRef = useRef(recipe)
   recipeRef.current = recipe
 
-  /* 曲线控制点（0..1 归一化坐标），存入 recipe.light.curve；后端 /v1/grade/preview 预留解析该字段 */
+  /* 曲线控制点（0..1 归一化坐标），存入 recipe.light.curve，由后端按曲线重映射亮度 */
   const curvePoints = useMemo<CurvePoint[]>(() => {
     const raw = (recipe.light as { curve?: unknown } | undefined)?.curve
     if (Array.isArray(raw) && raw.length >= 2) return raw as CurvePoint[]
@@ -616,7 +616,7 @@ export function GradePage({
                   open={folds.curve}
                   onToggle={() => setFolds((current) => ({ ...current, curve: !current.curve }))}
                 >
-                  {/* 曲线点写入 recipe.light.curve；后端 /v1/grade/preview 预留解析该字段 */}
+                  {/* 曲线点写入 recipe.light.curve，由后端渲染时应用 */}
                   <CurveEditor
                     points={curvePoints}
                     onChange={(points) => update('light.curve', points)}

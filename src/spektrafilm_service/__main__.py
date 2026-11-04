@@ -21,6 +21,9 @@ def _warmup() -> None:
         from spektrafilm.utils.numba_warmup import warmup
 
         warmup()
+        from spektrafilm_service import lut_preview
+
+        lut_preview.warmup()
     except Exception:  # noqa: BLE001 - 预热失败不影响服务
         return
 

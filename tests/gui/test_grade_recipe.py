@@ -111,3 +111,26 @@ def test_recipe_is_identity_only_when_everything_neutral() -> None:
     recipe.color = ColorRecipe(saturation=1.0)
     assert not recipe.is_identity()
     assert recipe.dirty_count() == 1
+
+
+def test_point_curve_roundtrip_and_identity() -> None:
+    recipe = GradeRecipe.from_dict(
+        {'light': {'curve': [{'x': 0, 'y': 0}, {'x': 0.5, 'y': 0.6}, {'x': 1, 'y': 1}]}}
+    )
+    assert recipe.light.curve == ((0.0, 0.0), (0.5, 0.6), (1.0, 1.0))
+    assert recipe.to_dict()['light']['curve'] == [
+        {'x': 0.0, 'y': 0.0},
+        {'x': 0.5, 'y': 0.6},
+        {'x': 1.0, 'y': 1.0},
+    ]
+    assert not recipe.is_identity()
+    assert recipe.dirty_count() >= 1
+
+
+def test_point_curve_accepts_pairs_and_rejects_invalid() -> None:
+    pairs = GradeRecipe.from_dict({'light': {'curve': [[0, 0], [1, 1]]}})
+    assert pairs.light.curve == ((0.0, 0.0), (1.0, 1.0))
+
+    assert GradeRecipe.from_dict({'light': {'curve': [[0, 0]]}}).light.curve is None
+    assert GradeRecipe.from_dict({'light': {'curve': [[0, 0], [2, 1]]}}).light.curve is None
+    assert GradeRecipe.from_dict({'light': {'curve': 'nope'}}).light.curve is None

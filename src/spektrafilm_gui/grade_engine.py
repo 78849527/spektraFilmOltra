@@ -272,7 +272,21 @@ def _apply_highlight_rolloff(image: np.ndarray, rolloff: float) -> np.ndarray:
     return (image - strength * over * over).astype(np.float32)
 
 
+def _apply_point_curve(image: np.ndarray, points) -> np.ndarray:
+    """Apply a normalized point curve to luminance, preserving hue."""
+    xs = np.asarray([point[0] for point in points], dtype=np.float32)
+    ys = np.asarray([point[1] for point in points], dtype=np.float32)
+    if xs.shape == ys.shape and np.allclose(xs, ys, atol=1e-4):
+        return image
+    data = np.asarray(image, dtype=np.float32)
+    y = _luma(data)
+    target = np.interp(y, xs, ys).astype(np.float32)
+    return (data + (target - y)[..., None]).astype(np.float32)
+
 def _apply_parametric_curve(image: np.ndarray, light: LightRecipe) -> np.ndarray:
+    points = getattr(light, 'curve', None)
+    if points:
+        return _apply_point_curve(image, points)
     curve = (
         (light.curve_highlights, 0.88),
         (light.curve_lights, 0.62),

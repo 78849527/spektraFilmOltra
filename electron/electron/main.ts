@@ -17,7 +17,7 @@ import { startSidecar, type SidecarHandle } from './sidecar'
 protocol.registerSchemesAsPrivileged([
   {
     scheme: 'spektra-media',
-    privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, bypassCSP: true },
+    privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, bypassCSP: true, corsEnabled: true },
   },
 ])
 

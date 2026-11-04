@@ -295,10 +295,47 @@ export function handle(method: string, endpoint: string, body?: Record<string, u
     return opened
   }
 
+  if (method === 'POST' && endpoint === '/v1/preview/fast') {
+    const scale = Number(payload.scale ?? 0.5)
+    const longEdge = scale >= 1 ? 1600 : 800
+    const key = hashStr(`${currentPhotoPath}:${scale}:${JSON.stringify(state)}:fast`)
+    const job = submitJob(
+      'preview',
+      [
+        { label: 'preprocess', index: 1, total: 6 },
+        { label: 'scanning.scan_print', index: 6, total: 6 },
+      ],
+      () => ({
+        image_path: `${currentPhotoPath}@render@${scale}@${key}`,
+        width: longEdge,
+        height: Math.round((longEdge * 2) / 3),
+        output_color_space: 'sRGB',
+        elapsed_ms: 40,
+        timings: {},
+        status: 'predicted',
+        fingerprint: key,
+        predicted: true,
+      }),
+      60,
+    )
+    return { job_id: job.id }
+  }
+
+  if (method === 'POST' && endpoint === '/v1/preview/preflight') {
+    return {
+      edge: Number(payload.edge ?? 256),
+      model: { max: 0.9, p99: 0.5, mean: 0.2 },
+      effects: { max: 1.2, p99: 0.6, mean: 0.2 },
+      thresholds: { max: 2.0, p99: 1.0 },
+      ok: true,
+      warning: '',
+    }
+  }
+
   if (method === 'POST' && endpoint === '/v1/preview') {
     const scale = Number(payload.scale ?? 0.5)
     const longEdge = scale >= 1 ? 1600 : 800
-    const key = hashStr(`${currentPhotoPath}:${scale}:${JSON.stringify(state).length}`)
+    const key = hashStr(`${currentPhotoPath}:${scale}:${JSON.stringify(state)}`)
     const job = submitJob(
       'preview',
       [
@@ -468,7 +505,7 @@ export function handle(method: string, endpoint: string, body?: Record<string, u
 
   if (method === 'POST' && endpoint === '/v1/grade/preview') {
     const handoff = String(payload.handoff ?? '')
-    const key = hashStr(`${handoff}:${JSON.stringify(payload.recipe ?? {}).length}`)
+    const key = hashStr(`${handoff}:${JSON.stringify(payload.recipe ?? {})}`)
     const job = submitJob(
       'grade_preview',
       [

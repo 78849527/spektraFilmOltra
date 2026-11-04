@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -22,7 +23,7 @@ from spektrafilm_gui.quick_engine import QuickEngine
 from spektrafilm_gui.runtime_guard import SIMULATION_LOCK
 from spektrafilm_gui.state import PROJECT_DEFAULT_GUI_STATE, GuiState, clone_gui_state
 
-from spektrafilm_service import develop, paths
+from spektrafilm_service import develop, lut_preview, paths
 from spektrafilm_service.jobs import Job, JobCancelled, JobQueue
 
 
@@ -93,7 +94,9 @@ class PhotoSession:
     original_preview_path: Path
     display_preview_path: Path
     last_full_render: FullRender | None = None
+    last_fast_preview: PreviewResult | None = None
     preview_cache: dict[int, np.ndarray] = field(default_factory=dict)
+    auto_ev_cache: dict[tuple[int, str], float] = field(default_factory=dict)
 
 
 @dataclass
@@ -105,11 +108,31 @@ class SessionState:
     lock: threading.RLock = field(default_factory=threading.RLock)
 
 
+def _delta_e_stats(reference, candidate):
+    import colour
+
+    space = colour.RGB_COLOURSPACES['ProPhoto RGB']
+    ref_lab = colour.XYZ_to_Lab(
+        colour.RGB_to_XYZ(np.asarray(reference, dtype=float), space)
+    )
+    cand_lab = colour.XYZ_to_Lab(
+        colour.RGB_to_XYZ(np.asarray(candidate, dtype=float), space)
+    )
+    delta = colour.delta_E(
+        ref_lab.reshape(-1, 3), cand_lab.reshape(-1, 3), method='CIE 2000'
+    )
+    return {
+        'max': float(np.max(delta)),
+        'p99': float(np.percentile(delta, 99)),
+        'mean': float(np.mean(delta)),
+    }
+
 class ServiceSession:
     def __init__(self, queue: JobQueue):
         self.state = SessionState()
         self.queue = queue
         self.quick = QuickEngine()
+        self.lut_cache = lut_preview.PreviewLutCache()
         self.item_id = ''
         self._photo_counter = 0
 
@@ -252,6 +275,7 @@ class ServiceSession:
 
     def cancel_preview(self) -> None:
         self.queue.cancel_kind('preview')
+        self.queue.cancel_kind('preview_fast')
 
     def submit_preview(self, scale: float) -> Job:
         return self.queue.submit(
@@ -297,7 +321,7 @@ class ServiceSession:
         self.state.last_preview = result
         return self._preview_payload(result)
 
-    def _preview_payload(self, result: PreviewResult) -> dict[str, Any]:
+    def _preview_payload(self, result: PreviewResult, *, predicted: bool = False) -> dict[str, Any]:
         return {
             'image_path': str(result.path),
             'width': result.width,
@@ -307,9 +331,146 @@ class ServiceSession:
             'timings': result.timings,
             'status': result.status,
             'fingerprint': result.fingerprint,
+            'predicted': predicted,
         }
 
     # ── 全尺寸 ──────────────────────────────────────────────
+    # ── LUT 预测预览（P2 服务接线） ────────────────────────
+    def submit_fast_preview(self, scale: float) -> Job:
+        return self.queue.submit(
+            'preview_fast',
+            lambda job: self.run_fast_preview(scale, job),
+            supersede_kind='preview_fast',
+            initial_label='预测中…',
+        )
+
+    def run_fast_preview(self, scale: float, job: Job) -> dict[str, Any]:
+        photo = self.state.photo
+        if photo is None:
+            raise RuntimeError('请先载入一张输入图像')
+        fingerprint = self.preview_fingerprint(scale) + ':lut'
+        cached = photo.last_fast_preview
+        if cached is not None and cached.fingerprint == fingerprint and cached.path.exists():
+            return self._preview_payload(cached, predicted=True)
+
+        self.queue.update_progress(job, '预测预览', 0, 1)
+        start = time.perf_counter()
+        long_edge = max(int(photo.image.shape[0]), int(photo.image.shape[1]))
+        target_edge = min(max(1, int(round(long_edge * float(scale)))), develop.PREVIEW_MAX_EDGE)
+        source = photo.preview_cache.get(target_edge)
+        if source is None:
+            source = develop.preview_source(np.double(photo.image), scale)
+            photo.preview_cache[target_edge] = source
+
+        bundle = self.lut_cache.get(self.state.gui_state)
+        if self.queue.is_cancelled(job):
+            raise JobCancelled('预测预览已被更新的请求取代')
+
+        params = build_params_from_state(self.state.gui_state)
+        auto_ev = 0.0
+        if params.camera.auto_exposure:
+            ev_key = (target_edge, str(params.camera.auto_exposure_method))
+            auto_ev = photo.auto_ev_cache.get(ev_key)
+            if auto_ev is None:
+                auto_ev = lut_preview.measure_auto_ev(
+                    source,
+                    params.io.input_color_space,
+                    params.io.input_cctf_decoding,
+                    method=params.camera.auto_exposure_method,
+                )
+                photo.auto_ev_cache[ev_key] = auto_ev
+
+        linear = bundle.predict(
+            source,
+            auto_ev=auto_ev,
+            exposure_ev=float(params.camera.exposure_compensation_ev),
+            print_exposure=float(params.enlarger.print_exposure),
+            compensate=bool(self.state.gui_state.simulation.enlarger.print_exposure_compensation),
+        )
+        rgb = lut_preview.to_display_rgb8(linear)
+        target = paths.preview_dir() / f'fast-{fingerprint[:16]}.jpg'
+        develop.save_image_oiio(
+            str(target),
+            rgb.astype(np.float32) / 255.0,
+            bit_depth=8,
+            color_space='sRGB',
+            cctf_encoding=True,
+        )
+        elapsed_ms = int(round((time.perf_counter() - start) * 1000))
+        result = PreviewResult(
+            fingerprint=fingerprint,
+            path=target,
+            width=int(rgb.shape[1]),
+            height=int(rgb.shape[0]),
+            output_color_space='sRGB',
+            elapsed_ms=elapsed_ms,
+            timings={},
+            status='predicted',
+        )
+        photo.last_fast_preview = result
+        return self._preview_payload(result, predicted=True)
+    # ── 精度预检（P3） ─────────────────────────────────────
+    def preflight(self, edge: int = 256) -> dict[str, Any]:
+        photo = self.state.photo
+        if photo is None:
+            raise RuntimeError('请先载入一张输入图像')
+
+        long_edge = max(int(photo.image.shape[0]), int(photo.image.shape[1]))
+        scale = min(1.0, float(edge) / max(1, long_edge))
+        source = develop.preview_source(np.double(photo.image), scale)
+
+        params = build_params_from_state(self.state.gui_state)
+        auto_ev = 0.0
+        if params.camera.auto_exposure:
+            auto_ev = lut_preview.measure_auto_ev(
+                source,
+                params.io.input_color_space,
+                params.io.input_cctf_decoding,
+                method=params.camera.auto_exposure_method,
+            )
+
+        with SIMULATION_LOCK:
+            bundle = self.lut_cache.get(self.state.gui_state)
+            predicted = bundle.predict(
+                source,
+                auto_ev=auto_ev,
+                exposure_ev=float(params.camera.exposure_compensation_ev),
+                print_exposure=float(params.enlarger.print_exposure),
+                compensate=bool(
+                    self.state.gui_state.simulation.enlarger.print_exposure_compensation
+                ),
+            )
+            deterministic = self._render_compare(source, deterministic=True)
+            full = self._render_compare(source, deterministic=False)
+
+        model = _delta_e_stats(deterministic, predicted)
+        effects = _delta_e_stats(full, deterministic)
+        ok = model['max'] <= 2.0 and model['p99'] <= 1.0
+        warning = ''
+        if not ok:
+            warning = '预测预览与精算结果存在可见差异，交付一律按精算结果。'
+        return {
+            'edge': int(min(edge, develop.PREVIEW_MAX_EDGE)),
+            'model': model,
+            'effects': effects,
+            'thresholds': {'max': 2.0, 'p99': 1.0},
+            'ok': bool(ok),
+            'warning': warning,
+        }
+
+    def _render_compare(self, source: np.ndarray, *, deterministic: bool) -> np.ndarray:
+        params = build_params_from_state(self.state.gui_state)
+        params.io.output_color_space = 'ProPhoto RGB'
+        params.io.output_cctf_encoding = False
+        if deterministic:
+            params.debug.deactivate_spatial_effects = True
+            params.debug.deactivate_stochastic_effects = True
+            params.film_render.halation.boost_ev = 0.0
+            params.scanner.white_correction = False
+            params.scanner.black_correction = False
+            params.scanner.unsharp_mask = (0.0, 0.0)
+        simulator = Simulator(digest_params(params))
+        return np.asarray(simulator.process(np.double(source)), dtype=np.float32)
     def _simulate(
         self,
         image: np.ndarray,

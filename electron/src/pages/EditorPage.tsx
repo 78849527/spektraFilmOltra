@@ -93,6 +93,7 @@ export function EditorPage({
   const [exporting, setExporting] = useState(false)
   const [hintId, setHintId] = useState(0)
   const [preflight, setPreflight] = useState<PreflightInfo | null>(null)
+  const [preflightDone, setPreflightDone] = useState(false)
 
   const stateRef = useRef(state)
   const scaleRef = useRef(scale)
@@ -196,7 +197,10 @@ export function EditorPage({
         setBusy(false)
         setProgress(null)
       } catch {
-        // 预测帧失败不打扰用户，等真正的预览结果
+        if (seq === renderSeqRef.current) {
+          setBusy(false)
+          setProgress(null)
+        }
       }
     })()
   }, [])
@@ -523,11 +527,14 @@ export function EditorPage({
   async function openExport() {
     setExportOpen(true)
     setPreflight(null)
+    setPreflightDone(false)
     try {
       const result = await request<PreflightInfo>('POST', '/v1/preview/preflight', { edge: 256 })
       setPreflight(result)
     } catch {
       // 预检失败不影响正常导出
+    } finally {
+      setPreflightDone(true)
     }
   }
 
@@ -977,7 +984,9 @@ export function EditorPage({
                 : preflight.effects.p99 > 0.5
                   ? '预览为预测帧，不含颗粒/光晕等特效；导出会按完整精算生成。'
                   : null
-              : '正在检查预览与精算的一致性…'
+              : preflightDone
+                ? '预检不可用，导出仍按完整精算执行。'
+                : '正在检查预览与精算的一致性…'
           }
         />
       ) : null}

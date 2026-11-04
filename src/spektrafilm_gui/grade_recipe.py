@@ -54,6 +54,43 @@ def _text(value: Any, default: str = '') -> str:
     return default
 
 
+def _unit(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number) or number < 0.0 or number > 1.0:
+        return None
+    return number
+
+
+def _curve_points(value: Any) -> tuple[tuple[float, float], ...] | None:
+    """Parse a point curve (normalized ``x, y`` pairs) or return None."""
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        return None
+    points: list[tuple[float, float]] = []
+    for item in list(value)[:64]:
+        if isinstance(item, Mapping):
+            x = _unit(item.get('x'))
+            y = _unit(item.get('y'))
+        elif isinstance(item, Sequence) and not isinstance(item, (str, bytes)) and len(item) >= 2:
+            x = _unit(item[0])
+            y = _unit(item[1])
+        else:
+            continue
+        if x is None or y is None:
+            continue
+        points.append((x, y))
+    points.sort()
+    cleaned: list[tuple[float, float]] = []
+    for x, y in points:
+        if cleaned and abs(x - cleaned[-1][0]) < 1e-3:
+            continue
+        cleaned.append((x, y))
+    if len(cleaned) < 2:
+        return None
+    return tuple(cleaned)
+
 # ── 子结构 ───────────────────────────────────────────────────────
 
 
@@ -71,6 +108,7 @@ class LightRecipe:
     curve_lights: float = 0.0
     curve_darks: float = 0.0
     curve_shadows: float = 0.0
+    curve: tuple[tuple[float, float], ...] | None = None
 
     def to_dict(self) -> dict[str, float]:
         return {
@@ -86,6 +124,9 @@ class LightRecipe:
             'curve_lights': float(self.curve_lights),
             'curve_darks': float(self.curve_darks),
             'curve_shadows': float(self.curve_shadows),
+            'curve': None if self.curve is None else [
+                {'x': float(x), 'y': float(y)} for x, y in self.curve
+            ],
         }
 
     @classmethod
@@ -104,6 +145,7 @@ class LightRecipe:
             curve_lights=_number(source.get('curve_lights'), 0.0, -100.0, 100.0),
             curve_darks=_number(source.get('curve_darks'), 0.0, -100.0, 100.0),
             curve_shadows=_number(source.get('curve_shadows'), 0.0, -100.0, 100.0),
+            curve=_curve_points(source.get('curve')),
         )
 
 

@@ -70,6 +70,17 @@ class Api:
             job = self.session.submit_preview(scale)
             return 200, {'job_id': job.id}
 
+        if method == 'POST' and path == '/v1/preview/fast':
+            scale = float(body.get('scale') or 0.5)
+            if body.get('force_precise'):
+                job = self.session.submit_preview(scale)
+            else:
+                job = self.session.submit_fast_preview(scale)
+            return 200, {'job_id': job.id}
+
+        if method == 'POST' and path == '/v1/preview/preflight':
+            return 200, self.session.preflight(int(body.get('edge') or 256))
+
         if method == 'POST' and path == '/v1/preview/cancel':
             self.session.cancel_preview()
             return 200, {'ok': True}
