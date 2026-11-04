@@ -282,6 +282,9 @@ struct EditorSnapshot {
     var originalImage: NSImage? = nil
     var previewScale: Double = 0.25
     var renderPhase: RenderPhase = .idle
+    var previewIsPredicted: Bool = false
+    var previewRevision: Int = 0
+    var preflightNotice: String? = nil
 }
 
 struct GradeSnapshot {
@@ -332,6 +335,7 @@ struct SkinActions {
     var importFolder: () -> Void = {}
     var exportAs: (String) -> Void = { _ in }
     var exportWithSettings: (ExportSettings) -> Void = { _ in }
+    var refreshExportPreflight: () -> Void = {}
     var gradeRecipeChanged: (GradeRecipe) -> Void = { _ in }
     var gradePresetSaved: (String, GradeRecipe) -> Void = { _, _ in }
     var gradePresetDeleted: (String) -> Void = { _ in }

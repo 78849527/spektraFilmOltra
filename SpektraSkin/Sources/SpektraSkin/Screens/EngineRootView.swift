@@ -110,6 +110,7 @@ struct EngineRootView: View {
         }
         actions.exportAs = { host.exportAs($0) }
         actions.exportWithSettings = { host.export($0) }
+        actions.refreshExportPreflight = { host.refreshExportPreflight() }
         actions.renderScaleChanged = { host.setPreviewScale($0) }
         actions.reRender = { host.renderPreview() }
         actions.toggleFavorite = { host.toggleFavorite($0) }

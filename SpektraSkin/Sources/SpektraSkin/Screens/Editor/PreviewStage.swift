@@ -10,6 +10,7 @@ struct PreviewStage: View {
     var originalImage: NSImage? = nil
     var previewScale: Double = 0.25
     var renderPhase: RenderPhase = .idle
+    var previewRevision: Int = 0
     let actions: SkinActions
 
     @State private var zoom: CGFloat = 1
@@ -17,6 +18,10 @@ struct PreviewStage: View {
     @State private var rotation: Double = 0
     @State private var compare = false
     @State private var compareSplit: CGFloat = 50
+    @State private var displayedImage: NSImage?
+    @State private var outgoingImage: NSImage?
+    @State private var previewFade: Double = 1
+    @State private var fadeGeneration = 0
 
     var body: some View {
         ZStack {
@@ -50,11 +55,19 @@ struct PreviewStage: View {
                         .shadow(color: .black.opacity(0.48), radius: 22, y: 16)
 
                     ZStack {
-                        if let image = previewImage {
-                            Image(nsImage: image)
+                        if let outgoingImage {
+                            Image(nsImage: outgoingImage)
                                 .resizable()
                                 .scaledToFill()
-                        } else {
+                                .opacity(1 - previewFade)
+                        }
+                        if let displayedImage {
+                            Image(nsImage: displayedImage)
+                                .resizable()
+                                .scaledToFill()
+                                .opacity(previewFade)
+                        }
+                        if displayedImage == nil && outgoingImage == nil {
                             VStack(spacing: 8) {
                                 ProgressView()
                                     .controlSize(.small)
@@ -158,6 +171,21 @@ struct PreviewStage: View {
             .padding(14)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear {
+            if displayedImage == nil { displayedImage = previewImage }
+        }
+        .onChange(of: previewRevision) { _, _ in
+            let previous = displayedImage
+            displayedImage = previewImage
+            outgoingImage = previous
+            previewFade = 0
+            fadeGeneration += 1
+            let generation = fadeGeneration
+            withAnimation(.easeOut(duration: 0.18)) { previewFade = 1 }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                if fadeGeneration == generation { outgoingImage = nil }
+            }
+        }
     }
 
     /// 原图/显影分割线：拖动改变裁剪比例。

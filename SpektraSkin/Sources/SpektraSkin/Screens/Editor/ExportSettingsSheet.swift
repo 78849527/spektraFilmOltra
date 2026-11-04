@@ -5,6 +5,7 @@ import AppKit
 /// 只提供 Swift 实际能写出的格式，不伪造压缩选项。
 struct ExportSettingsSheet: View {
     let photo: PhotoItem
+    let notice: String?
     let onCancel: () -> Void
     let onExport: (ExportSettings) -> Void
 
@@ -15,11 +16,13 @@ struct ExportSettingsSheet: View {
 
     init(
         photo: PhotoItem,
+        notice: String? = nil,
         initial: ExportSettings = ExportSettings(),
         onCancel: @escaping () -> Void,
         onExport: @escaping (ExportSettings) -> Void
     ) {
         self.photo = photo
+        self.notice = notice
         self.onCancel = onCancel
         self.onExport = onExport
         _format = State(initialValue: initial.format)
@@ -134,6 +137,16 @@ struct ExportSettingsSheet: View {
                         .font(.skin(9.5))
                         .foregroundStyle(SkinColor.text4)
                     Spacer()
+                }
+
+                if let notice, !notice.isEmpty {
+                    HStack {
+                        Text(notice)
+                            .font(.skin(9.5))
+                            .foregroundStyle(SkinColor.accent)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer()
+                    }
                 }
             }
             .padding(.horizontal, 18)

@@ -10,6 +10,10 @@ final class EngineHost: ObservableObject {
 
     @Published private(set) var revision = 0
     @Published private(set) var previewImage: NSImage?
+    @Published private(set) var previewIsPredicted = false
+    @Published private(set) var previewRevision = 0
+    @Published private(set) var preflightNotice: String?
+    @Published private(set) var preflightReport: PreviewPreflightReport?
     @Published private(set) var isRendering = false
     @Published private(set) var renderPhase = RenderPhase.idle
     @Published private(set) var statusMessage = "照片库已就绪"
@@ -37,6 +41,17 @@ final class EngineHost: ObservableObject {
     private var previewRenderInFlight = false
     private var renderToken = 0
     private let previewDebounce: TimeInterval = 1.0
+
+    /// LUT 预测档：拖动后 150 ms 出预测帧，停手 1 s 后真算替换。
+    private let previewLUT = PreviewLUTService()
+    private let previewLUTQueue = DispatchQueue(label: "spektra.preview.lut", qos: .userInitiated)
+    private let preflightQueue = DispatchQueue(label: "spektra.preview.preflight", qos: .utility)
+    private var pendingFastWork: DispatchWorkItem?
+    private var fastToken = 0
+    /// 真算已完成的参数代际；同代际迟到的预测帧必须丢弃。
+    private var accurateCompletedFastToken = 0
+    private var preflightToken = 0
+    private let fastDebounce: TimeInterval = 0.15
 
     // MARK: - 调色台
 
@@ -138,7 +153,23 @@ final class EngineHost: ObservableObject {
             cctfDecoding: loaded.cctfDecoding
         )
         renderPreview()
+        prewarmPreviewLUT()
         generateThumbnail(for: photo, image: loaded.image)
+    }
+
+    /// 换片后在后台预烘 LUT，首次拖滑杆不必等冷启动烘焙。
+    private func prewarmPreviewLUT() {
+        guard let photo = currentPhoto(), var params = try? photo.makeParams() else { return }
+        params.io.inputColorSpace = loadedColorSpace
+        params.io.inputCCTFDecoding = loadedCCTF
+        guard !params.io.scanFilm else { return }
+        let key = PreviewLUTService.cacheKey(
+            edit: photo.edit, inputColorSpace: loadedColorSpace, inputCCTF: loadedCCTF
+        )
+        let service = previewLUT
+        previewLUTQueue.asyncAfter(deadline: .now() + 0.3) {
+            _ = service.bundle(for: params, key: key)
+        }
     }
 
     private func generateThumbnail(for photo: LibraryPhoto, image: ImageRGB) {
@@ -209,11 +240,19 @@ final class EngineHost: ObservableObject {
         bump()
     }
 
-    /// 参数变化后的调度：停止输入 1s 再渲染；在途渲染立即中断。
+    /// 参数变化后的调度：150 ms 出 LUT 预测帧；停手 1 s 再真算替换。
+    /// 期间的新参数立即中断在途渲染/预测。
     func schedulePreviewRender() {
         guard loadedImage != nil else { return }
         pendingRenderWork?.cancel()
         pendingRenderWork = nil
+        pendingFastWork?.cancel()
+        pendingFastWork = nil
+        fastToken += 1
+        let fastTokenValue = fastToken
+        preflightNotice = nil
+        preflightReport = nil
+
         if previewRenderInFlight {
             renderToken += 1
             renderer.invalidate()
@@ -227,6 +266,15 @@ final class EngineHost: ObservableObject {
                 state: .waiting, label: "等待新参数…", index: 0, total: 1
             )
         }
+
+        let fast = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.pendingFastWork = nil
+            self.renderFastPreviewNow(token: fastTokenValue)
+        }
+        pendingFastWork = fast
+        DispatchQueue.main.asyncAfter(deadline: .now() + fastDebounce, execute: fast)
+
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.pendingRenderWork = nil
@@ -241,10 +289,15 @@ final class EngineHost: ObservableObject {
     func renderPreview() {
         pendingRenderWork?.cancel()
         pendingRenderWork = nil
+        pendingFastWork?.cancel()
+        pendingFastWork = nil
+        fastToken += 1
         renderPreviewNow()
     }
 
     private func renderPreviewNow() {
+        pendingFastWork?.cancel()
+        pendingFastWork = nil
         guard let photo = currentPhoto(), let image = loadedImage,
               var params = try? photo.makeParams() else { return }
         params.io.inputColorSpace = loadedColorSpace
@@ -276,10 +329,112 @@ final class EngineHost: ObservableObject {
                 guard let self, self.renderToken == token else { return }
                 self.previewImage = PreviewRenderer.nsImage(from: outcome.image)
                 self.previewHistogram = histogram
+                self.previewIsPredicted = false
+                self.previewRevision += 1
                 self.isRendering = false
                 self.previewRenderInFlight = false
+                self.accurateCompletedFastToken = self.fastToken
                 self.renderPhase = .idle
                 self.statusMessage = String(format: "预览 %.2f s", outcome.elapsed)
+                self.bump()
+            }
+        }
+    }
+
+    /// LUT 预测帧：拖动后 150 ms 触发，只读共享烘焙结果。
+    private func renderFastPreviewNow(token: Int) {
+        guard let photo = currentPhoto(), let image = loadedImage,
+              var params = try? photo.makeParams() else { return }
+        params.io.inputColorSpace = loadedColorSpace
+        params.io.inputCCTFDecoding = loadedCCTF
+        let key = PreviewLUTService.cacheKey(
+            edit: photo.edit, inputColorSpace: loadedColorSpace, inputCCTF: loadedCCTF
+        )
+        let longEdge = max(image.width, image.height)
+        let maxSize = max(160, Int(Double(longEdge) * previewScale))
+        let source = PreviewRenderer.prepared(image, maxSize: maxSize)
+        let service = previewLUT
+        previewLUTQueue.async { [weak self] in
+            let start = Date()
+            guard let bundle = service.bundle(for: params, key: key) else { return }
+            var autoEV = 0.0
+            if params.camera.autoExposure {
+                autoEV = PreviewLUTService.measureAutoEV(
+                    source: source, colorSpace: params.io.inputColorSpace,
+                    applyCCTFDecoding: params.io.inputCCTFDecoding,
+                    method: params.camera.autoExposureMethod
+                )
+            }
+            let linear = bundle.predict(
+                source: source, autoEV: autoEV,
+                exposureEV: params.camera.exposureCompensationEV,
+                printExposure: params.enlarger.printExposure,
+                compensate: params.enlarger.printExposureCompensation
+            )
+            let display = PreviewLUTService.displayImage(fromLinear: linear)
+            let image = PreviewRenderer.nsImage(from: display)
+            let histogram = Self.histogram(from: display)
+            let elapsed = Date().timeIntervalSince(start)
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                guard self.fastToken == token,
+                      self.accurateCompletedFastToken != token else { return }
+                guard let image else { return }
+                self.previewImage = image
+                self.previewHistogram = histogram
+                self.previewIsPredicted = true
+                self.previewRevision += 1
+                if !self.previewRenderInFlight {
+                    self.isRendering = false
+                    self.renderPhase = .idle
+                }
+                self.statusMessage = String(format: "预测 %.2f s", elapsed)
+                self.bump()
+            }
+        }
+    }
+
+    /// 导出面板打开时调用：预测档 vs 精算的 ΔE₀₀ 预检。
+    func refreshExportPreflight() {
+        guard let photo = currentPhoto(), let image = loadedImage,
+              var params = try? photo.makeParams() else {
+            preflightNotice = nil
+            preflightReport = nil
+            return
+        }
+        params.io.inputColorSpace = loadedColorSpace
+        params.io.inputCCTFDecoding = loadedCCTF
+        guard !params.io.scanFilm else {
+            preflightNotice = nil
+            preflightReport = nil
+            return
+        }
+        let key = PreviewLUTService.cacheKey(
+            edit: photo.edit, inputColorSpace: loadedColorSpace, inputCCTF: loadedCCTF
+        )
+        let source = PreviewRenderer.prepared(image, maxSize: 256)
+        preflightToken += 1
+        let token = preflightToken
+        preflightNotice = nil
+        preflightReport = nil
+        let service = previewLUT
+        preflightQueue.async { [weak self] in
+            guard let bundle = service.bundle(for: params, key: key) else { return }
+            var autoEV = 0.0
+            if params.camera.autoExposure {
+                autoEV = PreviewLUTService.measureAutoEV(
+                    source: source, colorSpace: params.io.inputColorSpace,
+                    applyCCTFDecoding: params.io.inputCCTFDecoding,
+                    method: params.camera.autoExposureMethod
+                )
+            }
+            let report = PreviewPreflight.run(
+                source: source, params: params, bundle: bundle, autoEV: autoEV
+            )
+            Task { @MainActor [weak self] in
+                guard let self, self.preflightToken == token else { return }
+                self.preflightReport = report
+                self.preflightNotice = report?.notice
                 self.bump()
             }
         }
@@ -1190,7 +1345,10 @@ extension EngineHost {
             previewImage: image,
             originalImage: photo.id == selectedID ? originalImage : nil,
             previewScale: previewScale,
-            renderPhase: photo.id == selectedID ? renderPhase : .idle
+            renderPhase: photo.id == selectedID ? renderPhase : .idle,
+            previewIsPredicted: photo.id == selectedID ? previewIsPredicted : false,
+            previewRevision: photo.id == selectedID ? previewRevision : 0,
+            preflightNotice: photo.id == selectedID ? preflightNotice : nil
         )
     }
 

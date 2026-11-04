@@ -11,6 +11,7 @@ struct EditorView: View {
         VStack(spacing: 0) {
             EditorTopBar(snapshot: snapshot, actions: actions) {
                 exportSettingsOpen = true
+                actions.refreshExportPreflight()
             }
 
             HStack(spacing: 0) {
@@ -33,6 +34,7 @@ struct EditorView: View {
                         originalImage: snapshot.originalImage,
                         previewScale: snapshot.previewScale,
                         renderPhase: snapshot.renderPhase,
+                        previewRevision: snapshot.previewRevision,
                         actions: actions
                     )
                     Filmstrip(
@@ -54,6 +56,7 @@ struct EditorView: View {
         .sheet(isPresented: $exportSettingsOpen) {
             ExportSettingsSheet(
                 photo: snapshot.photo,
+                notice: snapshot.preflightNotice,
                 onCancel: { exportSettingsOpen = false },
                 onExport: { settings in
                     exportSettingsOpen = false
