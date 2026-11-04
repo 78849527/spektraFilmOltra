@@ -7,6 +7,8 @@ struct ExportRequest {
     var bitDepth: Int = 16
     var colorSpace: String?
     var cctfEncoding: Bool?
+    /// 0 表示保持原尺寸；大于 0 且原图更大时按长边降采样。
+    var longEdge: Int = 0
 }
 
 struct ExportJobState {
@@ -66,12 +68,16 @@ final class ExportQueue {
                     ))
                     return
                 }
+                var output = result.rgbOut
+                if request.longEdge > 0 {
+                    output = Resize.longEdge(output, maxSize: request.longEdge)
+                }
                 self.publish(ExportJobState(
                     id: request.id, photoID: request.photoID,
                     progress: 0.95, message: "写入 \(request.destination.lastPathComponent)",
                     isFinished: false, error: nil
                 ))
-                try ImageExport.save(result.rgbOut, to: request.destination,
+                try ImageExport.save(output, to: request.destination,
                                      bitDepth: request.bitDepth,
                                      colorSpace: colorSpace, cctfEncoding: cctf)
                 self.publish(ExportJobState(

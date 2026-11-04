@@ -42,6 +42,7 @@ final class PreviewRenderer {
     }
 
     func render(params: RuntimePhotoParams, image: ImageRGB, maxSize: Int? = nil,
+                progress: ((String, Int, Int) -> Void)? = nil,
                 completion: @escaping (Outcome) -> Void) {
         lock.lock()
         generation += 1
@@ -57,7 +58,11 @@ final class PreviewRenderer {
             let pipeline = SimulationPipeline(params: working, lutService: lut, keepTaps: false)
             pipeline.shouldCancel = { self.currentGeneration() != token }
             let start = Date()
-            let result = pipeline.process(prepared)
+            let result = pipeline.process(prepared, progress: { label, index, total in
+                if self.currentGeneration() == token {
+                    progress?(label, index, total)
+                }
+            })
             let elapsed = Date().timeIntervalSince(start)
             if self.currentGeneration() != token { return }
             completion(Outcome(image: result.rgbOut, elapsed: elapsed, cancelled: false))

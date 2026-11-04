@@ -141,6 +141,38 @@ enum Resize {
         return output
     }
 
+    /// 按长边上限做双线性降采样；用于导出「长边像素」。原图不超过上限时原样返回。
+    static func longEdge(_ image: ImageRGB, maxSize: Int) -> ImageRGB {
+        guard maxSize > 0 else { return image }
+        let long = max(image.width, image.height)
+        guard long > maxSize else { return image }
+        let scale = Double(maxSize) / Double(long)
+        let width = max(Int((Double(image.width) * scale).rounded(.toNearestOrEven)), 1)
+        let height = max(Int((Double(image.height) * scale).rounded(.toNearestOrEven)), 1)
+        guard width != image.width || height != image.height else { return image }
+        var output = ImageRGB(width: width, height: height)
+        let stepX = Double(image.width) / Double(width)
+        let stepY = Double(image.height) / Double(height)
+        for y in 0..<height {
+            let sourceY = (Double(y) + 0.5) * stepY - 0.5
+            let baseY = Int(floor(sourceY))
+            let fy = sourceY - Double(baseY)
+            for x in 0..<width {
+                let sourceX = (Double(x) + 0.5) * stepX - 0.5
+                let baseX = Int(floor(sourceX))
+                let fx = sourceX - Double(baseX)
+                let x0 = FastGaussian.reflect(baseX, image.width)
+                let x1 = FastGaussian.reflect(baseX + 1, image.width)
+                let y0 = FastGaussian.reflect(baseY, image.height)
+                let y1 = FastGaussian.reflect(baseY + 1, image.height)
+                let top = image.pixel(x0, y0) * (1 - fx) + image.pixel(x1, y0) * fx
+                let bottom = image.pixel(x0, y1) * (1 - fx) + image.pixel(x1, y1) * fx
+                output.setPixel(x, y, top * (1 - fy) + bottom * fy)
+            }
+        }
+        return output
+    }
+
     /// 双三次（Catmull-Rom）放大。用于 `upscale_factor > 1`。
     /// Python 侧是 skimage `rescale(order=3)`（带 B 样条预滤波），两者视觉等价但非逐位一致。
     static func upscale(_ image: ImageRGB, factor: Double) -> ImageRGB {
