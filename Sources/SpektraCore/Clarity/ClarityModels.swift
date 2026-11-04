@@ -143,6 +143,7 @@ struct ClarityPlan: Codable {
 
 struct ClarityValidation: Codable {
     var passed: Bool
+    var skipped: Bool
     var highClipDelta: Double
     var lowClipDelta: Double
     var p50Change: Double

@@ -15,17 +15,19 @@ enum AdaptiveClarityEngine {
     }
 
     static func optimize(_ image: ImageRGB, mode: ClarityMode,
+                         validateResult: Bool = true,
                          shouldCancel: (() -> Bool)? = nil) throws -> ClarityResult {
         let analysis = try analyze(image, mode: mode)
         let controls = suggestedControls(for: analysis)
         return try process(
             image, analysis: analysis, controls: controls,
-            mode: mode, shouldCancel: shouldCancel
+            mode: mode, validateResult: validateResult, shouldCancel: shouldCancel
         )
     }
 
     static func process(_ image: ImageRGB, analysis: ClarityAnalysis,
                         controls: ClarityControls, mode: ClarityMode,
+                        validateResult: Bool = true,
                         shouldCancel: (() -> Bool)? = nil) throws -> ClarityResult {
         guard image.width > 0, image.height > 0 else { throw ClarityError.emptyImage }
         let linearInput = ClarityMath.srgbToLinearImage(image)
@@ -34,10 +36,19 @@ enum AdaptiveClarityEngine {
             linearInput, analysis: analysis, controls: controls,
             mode: mode, scales: scales, shouldCancel: shouldCancel
         )
-        var validation = validate(
-            input: linearInput, output: output.linear, analysis: analysis, plan: output.plan
-        )
-        if !validation.passed, !validation.issues.isEmpty {
+        var validation: ClarityValidation
+        if validateResult {
+            validation = validate(
+                input: linearInput, output: output.linear, analysis: analysis, plan: output.plan
+            )
+        } else {
+            validation = ClarityValidation(
+                passed: true, skipped: true,
+                highClipDelta: 0, lowClipDelta: 0, p50Change: 0,
+                haloRatio: 1, castResidual: 0, contrastRatio: 1, issues: []
+            )
+        }
+        if validateResult, !validation.passed, !validation.issues.isEmpty {
             for issue in validation.issues {
                 switch issue {
                 case .dehaze: scales.dehaze = 0.5
@@ -185,6 +196,7 @@ enum AdaptiveClarityEngine {
 
         return ClarityValidation(
             passed: unique.isEmpty,
+            skipped: false,
             highClipDelta: highDelta,
             lowClipDelta: lowDelta,
             p50Change: p50Change,
