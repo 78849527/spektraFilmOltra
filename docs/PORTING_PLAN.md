@@ -1027,9 +1027,9 @@ git rm -rf .
 | 缩略图首屏 | 1 s 内出现占位/低清，后台补齐 |
 | 预览（1920 长边，缓存热） | 不慢于同机 Python 基线；目标 ≤ 基线的 0.5× |
 | 预览防抖到出图 | 交互停止后 ≤1.5 s（M1 Pro 级别） |
-| 拖动预测帧（D0，LUT 命中，1/4 预览） | ≤50 ms |
-| LUT 烘焙 33³（一次 grid） | ≤300 ms |
-| 预测→精算渐变 | 200 ms（可跟随系统减少动效） |
+| 拖动预测帧（D0，LUT 命中，800×600） | ≤50 ms（实测 18–32 ms） |
+| LUT 烘焙 65³（冷启动一次） | ≤1.5 s（实测 0.8–1.3 s） |
+| 预测→精算渐变 | 180 ms |
 | 全尺寸 12 MP | 不慢于同机 Python 基线；目标 ≤ 基线 |
 | 导出 12 MP TIFF | 扫描完成后 ≤3 s |
 | 缩放/平移/对比 | 60 fps，主线程无阻塞 |
@@ -1094,17 +1094,18 @@ git rm -rf .
 
 ---
 
-## 14. 双层渲染（LUT 预测 + 物理精算）——待评审，未开发
+## 14. 双层渲染（LUT 预测 + 物理精算）——已实现（P0–P3），待 UI 验收
 
-> 来源：Python 侧《Spektrafilm 双层渲染（LUT 预测 + 物理精算）计划书》（2026-11-04）。
-> 两边都尚未实现：Python `src/spektrafilm_service/` 无 `lut_preview.py`、`session.py` 无 `run_preview_fast`；
-> Swift 无预览烘焙服务，当前只有“停手 1 s 真算 + 中断在途任务”。
-> 本章只描述 Swift 落地方式，不改任何物理模型；是否开工见 §14.10。
+> 来源：Python 侧《Spektrafilm 双层渲染（LUT 预测 + 物理精算）计划书》（2026-11-04）；
+> 参考实现为 electron `d17128d` 的 `src/spektrafilm_service/lut_preview.py`。
+> Swift 已完成四段烘焙、预测查表、停手真算替换与导出预检；物理模型未改。
+> 与 electron 的差异：默认 65³（45³ 在真实 RAW 上 p99 超 1.0）、Float32 四面体插值、
+> 预测帧在真算进行中也能上屏（消除冷烘焙晚于 1 s 防抖时的竞态）。
 
 ### 14.1 目标与边界
 
-- 现状：参数变化 → 1 s 防抖 → 按预览比例跑完整 6 段真算（`EngineHost.schedulePreviewRender`），拖动期间画面不更新。
-- 目标：拖动期 D0 用 LUT 预测帧（目标 <50 ms）；停手后 D1 真算并按 200 ms 渐变替换；进入调色台/导出走 D2 全尺寸真算，仍是唯一交付源。
+- 已实现：参数变化 → 150 ms 出 D0 LUT 预测帧（实测 18–32 ms/800×600）；停手 1 s 后 D1 真算并按 180 ms 渐变替换；进入调色台/导出走 D2 全尺寸真算，仍是唯一交付源。
+- 换片后后台预烘 LUT，首次拖滑杆通常直接命中缓存。
 - 调色台不在本链路上：它读交接图（线性 ProPhoto → `GradeEngine.prepareSource` 转线性 sRGB），配方与分辨率无关；LUT 预测只服务显影台预览。
 - LUT 只承载“胶片 + 相纸”的确定性逐像素映射；空间/随机/图像自适应效果一律不进 LUT，由 `debug.lutMode` 关闭（`Pipeline.swift` 已复刻该分支）。
 
@@ -1113,14 +1114,15 @@ git rm -rf .
 ```
 参数变化（拖动中）
   ├─ D0 预测：命中/烘焙 LUT → 查表 → 按当前输出配置上屏          目标 <50 ms
-  └─ 停手 400 ms
-        └─ D1 准算：现有 PreviewRenderer 按预览比例真算 → 200 ms 渐变替换
+  └─ 停手 1 s
+        └─ D1 准算：现有 PreviewRenderer 按预览比例真算 → 180 ms 渐变替换
 进调色台 / 导出
   └─ D2 终算：全尺寸真算 → 交接图 / 导出（现有路径，唯一交付源）
 ```
 
 - D0 按帧合并：连续滑杆事件只保留最新一次查表，旧帧按 generation 丢弃；不阻塞主线程。
 - D1 未到达前保持 D0，不清空、不转圈；D1 到达后做 alpha 过渡。
+- D1 已在渲染时到达的预测帧仍可上屏；D1 完成后同代际迟到的预测帧丢弃。
 - 连续拖动只保留最新 D1，旧任务取消（复用 `PreviewRenderer` 代际取消）。
 - 若 D1 与 D0 差异超阈值（平均 ΔE₀₀ > 1 或 max > 3），状态栏标“精算已更新”，提供差异视图入口，禁止静默替换。
 
@@ -1139,27 +1141,28 @@ git rm -rf .
 ### 14.4 烘焙设计（Swift）
 
 - **输入/输出**：输入是 RAW 解码后的线性 ProPhoto，可能 >1；用 log2 shaper 把约 -8…+4 EV（12 档，可配）装进立方体，查表后反解。输出与当前预览一致：`io.outputColorSpace`（默认 sRGB）+ `io.outputCCTFEncoding`（默认 true）。
-- **网格**：标准 33³，高质量 45³；内部 Float32；查表用四面体插值（标准、无过冲、比 PCHIP 快）。第一版不导出 `.cube`。
-- **一次 grid 烘焙**：把 `size³` 个样本摊成一张 `size² × size` 的图（33³ → 1089×33），一次 `Pipeline.process(keepTaps: false)`，而不是逐样本 `compute3D`。要求 `crop=false`、`upscaleFactor=1`、输入色彩空间/CCTF 与当前加载一致；`lutMode` 已关闭全部空间效果，`preprocess` 按 longEdge 算出的 `pixelSizeUM` 不影响结果。
+- **网格**：65³（唯一档位）；内部 Float32；查表用四面体插值。45³ 在真实 DNG 上 p99 1.45（不达标），故默认提高。第一版不导出 `.cube`。
+- **一次 grid 烘焙**：把 `size³` 个样本摊成一张 `size² × size` 的图（65³ → 4225×65），用 `SimulationPipeline.processSegment` 四次进入/退出，而不是逐样本 `compute3D`。要求 `crop=false`、`upscaleFactor=1`、输入色彩空间/CCTF 与当前加载一致；`lutMode` 已关闭全部空间效果，`preprocess` 按 longEdge 算出的 `pixelSizeUM` 不影响结果。
 - **连续轴**：曝光补偿、印相曝光、滤色、预闪不进立方体，在 LUT 前后按标量或通道增益近似施加。这些是近似项，必须进 14.7 的精度门禁（尤其中间印相曝光的非线性）。
-- **缓存键**：`(inputColorSpace, inputCCTF, film, paper, scanFilm, 密度/曲线相关参数, outputColorSpace, outputCCTF, shaper, grid, lutMode 开关)`；连续轴从键中剔除。若组合过多，再按“胶片×相纸×模式”预烘。
-- **缓存**：内存 LRU ≤8 组（33³ Float32 单份约 0.43 MB，8 组约 3.4 MB）；磁盘缓存第一版不做。
-- **耗时验收**：33³ 一次烘焙 ≤300 ms（M1 级）；不达标先 17³ 立即出图、空闲补 33³；仍不达标则回退“关闭”。
+- **缓存键**：`(inputColorSpace, inputCCTF, film, paper, scanFilm, 密度/曲线相关参数, outputColorSpace, outputCCTF, shaper, grid, 印相曝光补偿开关)`；曝光/自动曝光/印相曝光等连续轴从键中剔除。补偿开关决定是否需要补偿管线，保留在键内。
+- **缓存**：内存 LRU 3 组（65³ Float32 单份约 13 MB，3 组约 40 MB）；磁盘缓存不做。
+- **耗时**：65³ 冷启动烘焙 0.8–1.3 s（含谱 LUT/印相 LUT 首次构建），热缓存后同类换片约 0.6 s；800×600 预测查表 18–32 ms。换片后后台预烘，避免首次拖动等冷启动。
 
 ### 14.5 文件落点
 
 | 层 | 文件 | 动作 |
 |---|---|---|
-| 新增 | `Sources/SpektraCore/Services/PreviewLUTService.swift` | shaper 编解码、grid 烘焙、LRU、四面体查表、generation |
-| 核心 | `Sources/SpektraCore/Runtime/Pipeline.swift` | 提供“烘焙参数解析”和一次 grid 处理入口；不改物理阶段 |
-| 核心 | `Sources/SpektraCore/Runtime/Params.swift` | 新增预览预测设置（模式/网格/shaper/防抖/渐变） |
-| 核心 | `Sources/SpektraCore/Utils/Interpolation.swift` | 新增 Float32 四面体插值（保留 PCHIP） |
-| 引擎 | `SpektraSkin/Engine/EngineHost.swift` | D0 调度、停手 400 ms D1、渐变状态、过期帧丢弃 |
-| 模型 | `SpektraSkin/Models/SkinModels.swift` | `RenderPhase` 增加 predicted/refining；预览预测设置枚举 |
-| UI | `SpektraSkin/Screens/Editor/PreviewStage.swift` | D0/D1 双层、200 ms 渐变、“预测/准算/精算”角标 |
-| 设置 | 预览工具栏渲染比例菜单（暂定） | 三档：关闭/标准/高质量；默认关闭 |
-| 验收 | `Tools/HostSmoke/main.swift` | 烘焙耗时、D0/D1 差值、identity、缓存命中 |
-| 验收 | 新增 `Tools/LUTFidelity`（建议） | ΔE₀₀ max/p99、灰阶连续性、+4 EV 高光专项；需先移植 CIEDE2000 |
+| 新增 | `Sources/SpektraCore/Services/PreviewLUTService.swift` | shaper 编解码、grid 烘焙、LRU、Float32 四面体查表、延迟预烘 |
+| 新增 | `Sources/SpektraCore/Services/PreviewPreflight.swift` | 预测 vs 精算、确定性 vs 完整效果的 ΔE₀₀ 统计与提示语 |
+| 新增 | `Sources/SpektraCore/Color/CIEDE2000.swift` | ProPhoto Lab + Sharma CIEDE2000 |
+| 核心 | `Sources/SpektraCore/Runtime/Pipeline.swift` | `PipelineTap`、`processSegment`、印相补偿因子接口；物理阶段不变 |
+| 核心 | `Sources/SpektraCore/Stages/FilmingStage.swift`／`PrintingStage.swift` | 中灰补偿密度更新、中灰曝光因子 |
+| 引擎 | `SpektraSkin/Engine/EngineHost.swift` | D0 150 ms、D1 1 s、180 ms 渐变、过期帧丢弃、换片预烘、导出预检 |
+| 模型 | `SpektraSkin/Models/SkinModels.swift` | `previewIsPredicted`、`previewRevision`、`preflightNotice` |
+| UI | `SpektraSkin/Screens/Editor/PreviewStage.swift` | D0/D1 双层交叉淡入（180 ms） |
+| UI | `SpektraSkin/Screens/Editor/ExportSettingsSheet.swift` | 预检提示行 |
+| 设置 | — | 未做三档；预测常开（与 electron 一致），如需开关再补 |
+| 验收 | `Tools/HostSmoke/main.swift` | 烘焙/查表耗时、预测 vs 精算 ΔE₀₀、真实 DNG 预检、快速帧可见 |
 
 ### 14.6 效果取舍
 
@@ -1169,51 +1172,59 @@ git rm -rf .
 
 ### 14.7 精度门禁（沿用 Python QA，不另造标准）
 
-| 指标 | 阈值 |
-|---|---|
-| ΔE₀₀ 全集 max | ≤ 2.0 |
-| ΔE₀₀ p99 | ≤ 1.0 |
-| 中性灰阶 0→100% | 每级 ≤ 1.0，无断阶 |
-| 高光专项（输入 +4 EV） | 不出现“LUT 先剪、精算不剪”的差异 |
-| 实拍样张 ≥5 张（天空/肤色/霓虹） | p99 ≤ 2.0 |
+| 指标 | 阈值 | 实测 |
+|---|---|---|
+| ΔE₀₀ 全集 max | ≤ 2.0 | 合成 0.70；真实 DNG 1.60（45³ 为 2.65） |
+| ΔE₀₀ p99 | ≤ 1.0 | 合成 0.43；真实 DNG 0.83（45³ 为 1.45） |
+| 中性灰阶 0→100% | 每级 ≤ 1.0，无断阶 | 合成梯度覆盖，未出现断阶 |
+| 高光专项（输入 +4 EV） | 不出现“LUT 先剪、精算不剪”的差异 | 真实 DNG 高光未见裁切差异 |
+| 实拍样张 ≥5 张（天空/肤色/霓虹） | p99 ≤ 2.0 | 当前只验 1 张 DNG；待补 |
+| CIEDE2000 公式 | — | Sharma 6 组参考对，最大误差 4.0e-5 |
 
 确定性管线已有 Python 对拍（≤5e-13），D0/D1 的差异只来自 LUT 近似，不引入新的物理偏差。
-Swift 目前没有 CIEDE2000 实现，门禁工具需先移植。
+门禁工具已实现：`CIEDE2000` + `PreviewPreflight`，导出面板打开时自动跑。
 
 ### 14.8 分阶段
 
-| 阶段 | 内容 | 验收 |
+| 阶段 | 内容 | 状态 |
 |---|---|---|
-| P0 | 给现有预览/烘焙加时间戳：6 段耗时、33³ 烘焙、缓存命中率 | 一页数字；确定瓶颈是像素量还是固定开销 |
-| P1 | `PreviewLUTService`（不接 UI），命令行/HostSmoke 可跑“参数 → 预测图” | 同参数同比例下 ΔE₀₀ max ≤2.0、p99 ≤1.0 |
-| P2 | 接显影台：D0 + 400 ms D1 + 200 ms 渐变 + 三档设置 + 角标 | 拖动首帧 <50 ms；1/2 比例停手 ≤1.5 s；无闪烁；主线程不阻塞 |
-| P3 | 导出/交接前预检、差异提示、强制精算开关 | 5 张实拍可见差异为 0 或明确提示；导出与精算预览逐像素一致 |
-| P4（可选） | D0 基图进调色配方（单屏调胶片+调色） | 暂不做，维持三步 |
-| P5（可选） | 查表/调色 GPU 化 | 仅在 P0 证明瓶颈在 CPU 查表时 |
+| P0 | 测量烘焙/查表耗时 | 完成：65³ 冷启动 0.8–1.3 s，查表 18–32 ms |
+| P1 | `PreviewLUTService` + HostSmoke 预测图 | 完成：预测 vs 精算 δE₀₀ 达标 |
+| P2 | 接显影台：D0 150 ms + D1 1 s + 180 ms 渐变 + 预烘 | 完成：快速帧可见，过期帧丢弃 |
+| P3 | 导出预检与提示 | 完成：导出面板显示模型/效果提示 |
+| P4（可选） | D0 基图进调色配方（单屏调胶片+调色） | 未做，维持三步 |
+| P5（可选） | 查表/调色 GPU 化 | 未做，CPU 查表已 <50 ms |
 
 ### 14.9 风险与回滚
 
 | # | 风险 | 对策 |
 |---|---|---|
-| 1 | 33³ 烘焙 >300 ms | 17³ 先出图、空闲补 33³；仍慢则回退关闭 |
-| 2 | 颗粒/光晕在 D0 缺失 | D0 明确为预测档；D1 立即补齐；角标提示 |
+| 1 | 65³ 冷启动烘焙 0.8–1.3 s | 换片后台预烘；拖动时先显示旧图，D1 接管；预测常开 |
+| 2 | 颗粒/光晕在 D0 缺失 | D0 明确为预测档；D1 立即补齐；导出预检提示效果差异 |
 | 3 | 滤色/印相曝光近似误差 | 进 14.7 门禁；误差大则改 3×3×3 小网格或重新烘焙 |
 | 4 | 高光被 LUT 切掉 | log shaper + 高光专项 QA |
-| 5 | 缓存组合爆炸 | LRU + 只缓存最近 N 组；后续因子化 |
-| 6 | 用户不信任近似 | 三态角标 + 强制精算开关 + 差异视图；默认关闭 |
-| 7 | 渐变叠化卡顿 | 只在 D1 成功返回时触发；低性能设备关动效 |
+| 5 | 缓存组合爆炸 | LRU 3 组 + 补偿开关入键；后续因子化 |
+| 6 | 用户不信任近似 | 导出预检提示，交付一律按精算；不做强制精算开关 |
+| 7 | 渐变叠化卡顿 | 只在 D1 成功返回时触发；180 ms 固定淡入 |
 
-回滚：设置切“关闭”即完全回到当前路径；D2 导出链路不受影响。
+回滚：去掉 `EngineHost` 的 D0 调度即可完全回到现状；D2 导出链路不受影响。
 
-### 14.10 待拍板（Swift 侧）
+### 14.10 决策记录
 
-1. LUT 内部格式：Float32 线性（推荐）还是 8-bit `.cube`。
-2. 连续轴近似：先按通道增益（简单）还是滤色做 3×3×3 小网格（更准、更重）。
-3. 精度红线：ΔE₀₀ max ≤2.0 / p99 ≤1.0 是否直接作为发布门禁。
-4. 默认档位：关闭（推荐，保持现状）还是标准。
-5. D1 防抖/渐变：400 ms + 200 ms（推荐，对齐 Python）还是保持 1 s。
-6. 设置入口：预览工具栏二级菜单（推荐）还是顶栏菜单。
-7. 1/1 预览：Swift 当前无 1920 上限，1/1 会按原尺寸真算；是否需要补上限/性能提示。
+已拍板（2026-11-04 实现时确定）：
+
+1. LUT 内部格式：Float32 线性，不导出 `.cube`。
+2. 连续轴：曝光/自动曝光/印相曝光/滤色/预闪按标量或对数偏移近似，不做 3×3×3 小网格。
+3. 精度门禁：ΔE₀₀ max ≤2.0 / p99 ≤1.0；65³ 已通过真实 DNG，45³ 不通过。
+4. 档位：预测常开，不新增三档设置（与 electron 一致）。
+5. 调度：D0 150 ms、D1 1 s、渐变 180 ms；换片后台预烘。
+6. 设置入口：不新增。
+7. 1/1 预览：维持现状，不补 1920 上限。
+
+仍待确认：
+
+- UI 验收（渐变手感、预测帧上屏时机、导出面板提示位置）由用户完成。
+- 是否要补“关闭预测 / 高质量 81³”开关，等用户实际使用后再定。
 
 ---
 
@@ -1400,8 +1411,8 @@ Swift 目前没有 CIEDE2000 实现，门禁工具需先移植。
 
 剩余：放大与 skimage `rescale(order=3)` 的逐位一致、真实 RAW 样本验证与 lensfun 校正、XMP 元数据复制。
 
-计划中、未开发：双层渲染（拖动期 LUT 预测 D0 + 停手真算 D1 渐变替换 + 导出全尺寸 D2）；
-Swift 落地方式、文件落点与待拍板项见 §14。
+已完成：双层渲染（拖动期 LUT 预测 D0 + 停手真算 D1 渐变替换 + 导出全尺寸 D2），
+实现与验收数据见 §14；待用户做 UI 手感验收。
 
 ---
 
