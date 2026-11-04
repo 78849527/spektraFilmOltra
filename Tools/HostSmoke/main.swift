@@ -26,11 +26,13 @@ struct HostSmoke {
         edge.data[2] = 0
 
         let gradeReport = try runGradeSmoke()
+        let lutReport = try runLUTSmoke()
 
         let args = ProcessInfo.processInfo.environment
         guard let rawPath = args["RAW_PATH"], FileManager.default.fileExists(atPath: rawPath) else {
             let data = try JSONSerialization.data(
-                withJSONObject: ["edgeCompression": "finite", "raw": "skipped", "grade": gradeReport],
+                withJSONObject: ["edgeCompression": "finite", "raw": "skipped",
+                                 "grade": gradeReport, "lut": lutReport],
                 options: [.sortedKeys, .prettyPrinted]
             )
             print(String(data: data, encoding: .utf8) ?? "{}")
@@ -65,22 +67,32 @@ struct HostSmoke {
         host.applyQuick("camera_exposure", 1.0)
         host.applyQuick("tonal_contrast", 40)
         var second = 0.0
-        while (host.isRendering || host.renderPhase.isBusy) && second < 120 {
+        var sawFastPreview = false
+        while (host.isRendering || host.renderPhase.isBusy || host.previewIsPredicted)
+            && second < 120 {
+            if host.previewIsPredicted { sawFastPreview = true }
             try await Task.sleep(nanoseconds: 100_000_000)
             second += 0.1
         }
+
+        host.refreshExportPreflight()
+        let preflightWait = await wait(60) { host.preflightReport != nil }
 
         let exportURL = URL(fileURLWithPath: "/tmp/spektra_host_smoke_export.tif")
         try? FileManager.default.removeItem(at: exportURL)
         host.exportCurrent(to: exportURL)
         var exportWait = 0.0
-        while !FileManager.default.fileExists(atPath: exportURL.path) && exportWait < 300 {
+        var exportSize = 0
+        while exportWait < 300 {
+            if let attributes = try? FileManager.default.attributesOfItem(
+                atPath: exportURL.path), let value = attributes[.size] as? Int, value > 0 {
+                exportSize = value
+                break
+            }
             try await Task.sleep(nanoseconds: 200_000_000)
             exportWait += 0.2
         }
-        let exported = FileManager.default.fileExists(atPath: exportURL.path)
-        let size = (try? FileManager.default.attributesOfItem(
-            atPath: exportURL.path)[.size] as? Int) ?? 0
+        let exported = exportSize > 0
 
         // 调色台整链：交接图 → 调色预览 → 暖调重渲 → 导出。
         host.beginGrade()
@@ -133,11 +145,19 @@ struct HostSmoke {
             "quickAxes": snapshot.quickGroups.flatMap(\.axes).count,
             "proRows": snapshot.proPages.flatMap(\.groups).flatMap(\.rows).count,
             "renderAfterEdit": second,
+            "fastPreviewSeen": sawFastPreview,
+            "preflightWait": preflightWait,
+            "realModelMax": host.preflightReport?.model.max ?? -1,
+            "realModelP99": host.preflightReport?.model.p99 ?? -1,
+            "realEffectsP99": host.preflightReport?.effects.p99 ?? -1,
+            "realPreflightOK": host.preflightReport?.ok ?? false,
+            "realPreflightNotice": host.preflightNotice ?? "",
             "exported": exported,
             "exportWait": exportWait,
-            "exportBytes": size,
+            "exportBytes": exportSize,
             "status": host.statusMessage,
             "grade": gradeReport,
+            "lut": lutReport,
             "gradeSourceWait": sourceWait,
             "gradeFirstPreviewWait": firstGradeWait,
             "gradeRecipeWait": recipeWait,
@@ -159,6 +179,129 @@ struct HostSmoke {
             elapsed += 0.1
         }
         return elapsed
+    }
+
+    /// LUT 预览回归：烘焙、预测 vs 精算、ΔE₀₀ 门禁与查表耗时。
+    private static func runLUTSmoke() throws -> [String: Any] {
+        let edit = PhotoEdit()
+        guard let params = try? edit.runtimeParams() else {
+            throw NSError(domain: "smoke", code: 3, userInfo: [
+                NSLocalizedDescriptionKey: "无法载入默认 profile"
+            ])
+        }
+        let key = PreviewLUTService.cacheKey(
+            edit: edit,
+            inputColorSpace: params.io.inputColorSpace,
+            inputCCTF: params.io.inputCCTFDecoding
+        )
+        var compOffEdit = edit
+        compOffEdit.enlarger.printExposureCompensation = false
+        let compOffKey = PreviewLUTService.cacheKey(
+            edit: compOffEdit,
+            inputColorSpace: params.io.inputColorSpace,
+            inputCCTF: params.io.inputCCTFDecoding
+        )
+        let service = PreviewLUTService()
+        let source = makeLinearImage(96, 72)
+        let bakeStart = Date()
+        guard let bundle = service.bundle(for: params, key: key) else {
+            throw NSError(domain: "smoke", code: 4, userInfo: [
+                NSLocalizedDescriptionKey: "LUT 烘焙失败"
+            ])
+        }
+        let bakeMs = Date().timeIntervalSince(bakeStart) * 1000
+
+        var autoEV = 0.0
+        if params.camera.autoExposure {
+            autoEV = PreviewLUTService.measureAutoEV(
+                source: source, colorSpace: params.io.inputColorSpace,
+                applyCCTFDecoding: params.io.inputCCTFDecoding,
+                method: params.camera.autoExposureMethod
+            )
+        }
+        guard let preflight = PreviewPreflight.run(
+            source: source, params: params, bundle: bundle, autoEV: autoEV
+        ) else {
+            throw NSError(domain: "smoke", code: 5, userInfo: [
+                NSLocalizedDescriptionKey: "预检失败"
+            ])
+        }
+
+        var directParams = params
+        directParams.debug.lutMode = true
+        directParams.settings.previewMode = false
+        directParams.io.crop = false
+        directParams.io.upscaleFactor = 1
+        directParams.io.outputColorSpace = "ProPhoto RGB"
+        directParams.io.outputCCTFEncoding = false
+        let direct = SimulationPipeline(
+            params: directParams, keepTaps: false
+        ).process(source).rgbOut
+        let smallPredicted = bundle.predict(
+            source: source, autoEV: 0, exposureEV: 0,
+            printExposure: 1, compensate: false
+        )
+        var maxAbs = 0.0
+        for i in 0..<direct.data.count {
+            maxAbs = max(maxAbs, abs(direct.data[i] - smallPredicted.data[i]))
+        }
+        let large = makeLinearImage(800, 600)
+        let predictStart = Date()
+        let predicted = bundle.predict(
+            source: large, autoEV: autoEV,
+            exposureEV: params.camera.exposureCompensationEV,
+            printExposure: params.enlarger.printExposure,
+            compensate: params.enlarger.printExposureCompensation
+        )
+        let predictMs = Date().timeIntervalSince(predictStart) * 1000
+        let finite = predicted.data.allSatisfy(\.isFinite)
+
+        let pairs: [((Double, Double, Double), (Double, Double, Double), Double)] = [
+            ((50, 2.6772, -79.7751), (50, 0, -82.7485), 2.0425),
+            ((50, 3.1571, -77.2803), (50, 0, -82.7485), 2.8615),
+            ((50, 2.8361, -74.0200), (50, 0, -82.7485), 3.4412),
+            ((50, -1.3802, -84.2814), (50, 0, -82.7485), 1.0000),
+            ((50, -1.1848, -84.8006), (50, 0, -82.7485), 1.0000),
+            ((50, -0.9009, -85.5211), (50, 0, -82.7485), 1.0000),
+        ]
+        var deltaEError = 0.0
+        for (first, second, expected) in pairs {
+            let a = CIEDE2000.Lab(l: first.0, a: first.1, b: first.2)
+            let b = CIEDE2000.Lab(l: second.0, a: second.1, b: second.2)
+            deltaEError = max(deltaEError, abs(CIEDE2000.deltaE(a, b) - expected))
+        }
+
+        return [
+            "resolution": bundle.resolution,
+            "bakeMs": bakeMs,
+            "predictMs": predictMs,
+            "predictedFinite": finite,
+            "autoEV": autoEV,
+            "modelMax": preflight.model.max,
+            "modelP99": preflight.model.p99,
+            "effectsMax": preflight.effects.max,
+            "effectsP99": preflight.effects.p99,
+            "preflightOK": preflight.ok,
+            "notice": preflight.notice ?? "",
+            "deltaEMaxError": deltaEError,
+            "modelAbsDiff": maxAbs,
+            "compCacheKeyDiffers": compOffKey != key,
+        ]
+    }
+
+    private static func makeLinearImage(_ width: Int, _ height: Int) -> ImageRGB {
+        var data = [Double](repeating: 0, count: width * height * 3)
+        for y in 0..<height {
+            for x in 0..<width {
+                let u = Double(x) / Double(max(width - 1, 1))
+                let v = Double(y) / Double(max(height - 1, 1))
+                let p = (y * width + x) * 3
+                data[p] = 0.01 + 2.4 * pow(u, 2.4) + 0.02 * v
+                data[p + 1] = 0.01 + 1.2 * pow(v, 2.0) + 0.3 * pow(u, 1.2)
+                data[p + 2] = 0.02 + 0.9 * pow((u + v) / 2, 1.8)
+            }
+        }
+        return ImageRGB(width: width, height: height, data: data)
     }
 
     /// 调色引擎回归：identity 配方与 sRGB 编码一致、暖调输出有限、identity LUT 不改变像素。
