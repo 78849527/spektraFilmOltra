@@ -97,5 +97,19 @@
 - [x] 库搜索/筛选/排序、收藏、颜色标签、移除照片；编辑器收藏写回
 - 验收：`HostSmoke` 载入 12 MP DNG 预览 3.5 s、导出 TIFF 71 MB，无闪退；NaN/Inf 色域压缩回归通过
 
+## 第九阶段（electron 最新交互与调色台移植）
+- [x] 显影预览调度：参数停止 1 s 后渲染；期间新参数立即中断在途渲染并显示「已中断，等待新参数…」
+- [x] `RenderPhase` 进度（预处理/胶片曝光/显影/印相/扫描，index/total）显示在画布上
+- [x] 对比改为可拖分割线：原图叠在显影图上按比例裁剪，拖动改变分界
+- [x] 导出设置面板：格式、长边像素、目录、文件名模板（{name}/{film}/{paper}）
+- [x] 正片扫描模式下印相类快速轴禁用并给出原因
+- [x] `Sources/SpektraCore/Grade/GradeRecipe.swift`：与 Python `grade_recipe.py` 同字段、同默认、同钳位
+- [x] `Sources/SpektraCore/Grade/GradeEngine.swift`：曝光/白平衡 → sRGB 编码 → 影调 → 色彩 → 通透 → 清晰度/纹理 → 去雾 → 降噪 → 锐化 → 暗角/色差/颗粒 → LUT → 后处理
+- [x] `.cube` 解析、三线性插值、强度混合；内置「中性/清透/暖调/冷夜/黑白」预设 + 用户预设 JSON
+- [x] 调色台页面：LUT/预设左栏、画布、光影/色彩右栏、曲线/通透/画质/光学折叠、直方图与黑/白场分析
+- [x] 调色预览调度：120 ms/800 px 代理图 + 1.1 s/1600 px 精修，步骤间取消
+- [x] 调色导出：全尺寸显影 → 线性交接 → 调色 → 目标色彩空间转换 → TIFF/EXR
+- 验收：`HostSmoke` identity 配方与 sRGB 编码最大差 0；identity LUT 最大差 1.1e-16；12 MP DNG 交接图 8 s、暖调导出 1200 px TIFF 6.3 MB
+
 
 

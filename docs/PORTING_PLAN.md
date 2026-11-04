@@ -1267,8 +1267,10 @@ git rm -rf .
 `SpektraSkin` 引擎接线（快照/动作/真实预览与缩略图/直方图/导入导出/快速基线持久化）。
 对拍数据见 [parity_report.md](parity_report.md)。
 
-剩余：放大与 skimage `rescale(order=3)` 的逐位一致、真实 RAW 样本验证与 lensfun 校正、XMP 元数据复制、
-调色台（独立二次调色页面）的引擎化。
+后续已按 electron 分支最新版补齐：显影/调色预览的防抖与取消、进度显示、对比分割线、导出设置面板，
+以及完整调色台（`GradeRecipe` / `GradeEngine` / `.cube` LUT / 内置与用户预设 / 交接图与调色导出）。
+
+剩余：放大与 skimage `rescale(order=3)` 的逐位一致、真实 RAW 样本验证与 lensfun 校正、XMP 元数据复制。
 
 ---
 
