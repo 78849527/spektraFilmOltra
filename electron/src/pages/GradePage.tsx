@@ -2,11 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { errorMessage, mediaUrl, pickLut, request, waitForJob } from '../api'
 import { Button, Disclosure, FieldRow, SwitchRow, Tabs, ValueRow } from '../components/Controls'
 import { ExportDialog } from '../components/ExportDialog'
+import { CurveEditor, DEFAULT_CURVE_POINTS, type CurvePoint } from '../components/CurveEditor'
 import { Histogram } from '../components/Histogram'
 import { Icon } from '../components/Icons'
 import { useElementSize, useSmoothScroll } from '../components/scroll'
+import { BrandMark } from '../components/brands'
 import { formatBytes, formatSize } from '../state'
-import type { Bootstrap, ExportSettings, HandoffInfo, ItemRecord, PresetEntry, Recipe } from '../types'
+import type { Bootstrap, ExportSettings, HandoffInfo, ItemRecord, OpenedPhoto, PresetEntry, Recipe } from '../types'
 import './pages.css'
 
 const PROXY_EDGE = 800
@@ -53,7 +55,7 @@ function read(root: unknown, path: string): number {
 
 function write<T extends object>(root: T, path: string, value: unknown): T {
   const next = JSON.parse(JSON.stringify(root)) as Record<string, unknown>
-  const parts = path.split(/[\\/]/)
+  const parts = path.split('.')
   let node = next
   for (const part of parts.slice(0, -1)) {
     const child = node[part]
@@ -64,21 +66,19 @@ function write<T extends object>(root: T, path: string, value: unknown): T {
   return next as T
 }
 
-function basename(path: string): string {
-  const parts = path.split(/[\\/]/)
-  return parts[parts.length - 1] || path
-}
 
 export function GradePage({
   bootstrap,
   item,
   handoff,
+  photo,
   onBack,
   onNotify,
 }: {
   bootstrap: Bootstrap
   item: ItemRecord
   handoff: HandoffInfo
+  photo: OpenedPhoto | null
   onBack: () => void
   onNotify: (message: string, error?: boolean) => void
 }) {
@@ -97,9 +97,31 @@ export function GradePage({
   const [borderOn, setBorderOn] = useState(false)
   const [borderStyle, setBorderStyle] = useState<BorderStyle>('white')
   const [borderWidth, setBorderWidth] = useState(3)
+  const [lutOpen, setLutOpen] = useState(false)
 
   const recipeRef = useRef(recipe)
   recipeRef.current = recipe
+
+  /* 曲线控制点（0..1 归一化坐标），存入 recipe.light.curve；后端 /v1/grade/preview 预留解析该字段 */
+  const curvePoints = useMemo<CurvePoint[]>(() => {
+    const raw = (recipe.light as { curve?: unknown } | undefined)?.curve
+    if (Array.isArray(raw) && raw.length >= 2) return raw as CurvePoint[]
+    return DEFAULT_CURVE_POINTS
+  }, [recipe])
+
+  /* 与显影台一致的照片信息派生值 */
+  const exif = photo?.exif
+  const cameraLabel = exif?.model || exif?.make || '未知机身'
+  const lensLabel = exif?.lens || '未知镜头'
+  const megapixels = Math.round((item.width * item.height) / 1e6)
+  const metaParams = exif
+    ? [
+        exif.iso ? `ISO ` + exif.iso : '',
+        exif.focal_length ? `` + exif.focal_length + ` mm` : '',
+        exif.aperture ? `ƒ` + exif.aperture : '',
+        exif.exposure ? `` + exif.exposure + ` s` : '',
+      ].filter(Boolean)
+    : []
 
   const canvasRef = useRef<HTMLDivElement>(null)
   const canvasSize = useElementSize(canvasRef)
@@ -337,7 +359,6 @@ export function GradePage({
 
         <span className="grow" />
 
-        <span className="badge badge-accent">调色台</span>
 
         <Button icon="upload" kind="primary" height={28} onClick={() => setExportOpen(true)}>
           导出
@@ -349,19 +370,36 @@ export function GradePage({
           <div className="rail-info">
             <div className="photo-meta">
               <div className="photo-meta-head">
+                <span className="photo-brand">
+                  <BrandMark make={exif?.make} model={exif?.model} size={40} />
+                </span>
                 <span className="photo-meta-titles">
-                  <span className="photo-meta-name truncate" title={basename(handoff.path)}>
-                    {basename(handoff.path)}
+                  <span className="photo-meta-name truncate" title={item.name}>
+                    {item.name}
                   </span>
-                  <span className="photo-meta-sub truncate">
-                    交接图 · 16-bit · {handoff.color_space} 线性
+                  <span className="photo-meta-sub truncate" title={cameraLabel}>
+                    {cameraLabel}
                   </span>
                 </span>
               </div>
-              <div className="photo-meta-line">
-                {formatSize(handoff.width, handoff.height)}<span className="dot">·</span>
-                {formatBytes(handoff.bytes)}
+              <div className="photo-meta-block">
+                <div className="photo-meta-lens truncate" title={lensLabel}>
+                  {lensLabel}
+                </div>
+                <div className="photo-meta-line">
+                  {megapixels} MP<span className="dot">•</span>
+                  {formatSize(item.width, item.height)}<span className="dot">•</span>
+                  {formatBytes(item.file_size)}<span className="dot">•</span>
+                  {photo ? photo.color_space : '—'}
+                </div>
               </div>
+              {metaParams.length > 0 ? (
+                <div className="photo-meta-params">
+                  {metaParams.map((value, index) => (
+                    <span key={index}>{value}</span>
+                  ))}
+                </div>
+              ) : null}
             </div>
           </div>
 
@@ -379,30 +417,68 @@ export function GradePage({
 
           <div className="grade-rail-scroll" ref={railRef}>
             {railTab === 'lut' ? (
-              <>
-                <button
-                  className={`lut-row${(recipe.lut?.path ?? '') === '' ? ' active' : ''}`}
-                  onClick={() => update('lut.path', '')}
-                >
-                  无 LUT
-                </button>
-                {luts.map((lut) => (
+              <div className="lut-list">
+                <div className={`lut-card${(recipe.lut?.path ?? '') === '' ? ' active' : ''}`}>
                   <button
-                    key={lut.path}
-                    className={`lut-row${recipe.lut?.path === lut.path ? ' active' : ''}`}
-                    onClick={() => update('lut.path', lut.path)}
+                    className="lut-card-head"
+                    onClick={() => {
+                      update('lut.path', '')
+                      setLutOpen(false)
+                    }}
                   >
-                    <Icon name="sliders" size={12} />
-                    <span className="truncate">{lut.name}</span>
+                    <span className="lut-card-glyph">
+                      <Icon name="close" size={12} />
+                    </span>
+                    <span className="stack grow" style={{ minWidth: 0 }}>
+                      <span className="lut-card-title">无 LUT</span>
+                      <span className="lut-card-sub">不加载任何 LUT</span>
+                    </span>
                   </button>
-                ))}
-                <div style={{ padding: '10px 6px 0' }}>
-                  {slider('lut.strength', 'LUT 强度', 0, 100, 1, 0, '%')}
-                  <Button icon="plus" kind="secondary" onClick={() => void importLut()}>
-                    导入 LUT
-                  </Button>
                 </div>
-              </>
+                {luts.map((lut) => {
+                  const active = recipe.lut?.path === lut.path
+                  return (
+                    <div
+                      key={lut.path}
+                      className={`lut-card${active ? ' active' : ''}${active && lutOpen ? ' open' : ''}`}
+                    >
+                      <button
+                        className="lut-card-head"
+                        onClick={() => {
+                          if (active) {
+                            setLutOpen(!lutOpen)
+                          } else {
+                            update('lut.path', lut.path)
+                            setLutOpen(true)
+                          }
+                        }}
+                      >
+                        <span className="lut-card-glyph">
+                          <Icon name="sliders" size={13} />
+                        </span>
+                        <span className="stack grow" style={{ minWidth: 0 }}>
+                          <span className="lut-card-title truncate">{lut.name}</span>
+                          <span className="lut-card-sub">3D LUT</span>
+                        </span>
+                      </button>
+                      <div className="lut-card-body">
+                        {slider('lut.strength', 'LUT 强度', 0, 100, 1, 0, '%')}
+                      </div>
+                    </div>
+                  )
+                })}
+                <div className="lut-card lut-card-import">
+                  <button className="lut-card-head" onClick={() => void importLut()}>
+                    <span className="lut-card-glyph">
+                      <Icon name="importArrow" size={13} />
+                    </span>
+                    <span className="stack grow" style={{ minWidth: 0 }}>
+                      <span className="lut-card-title">导入 LUT</span>
+                      <span className="lut-card-sub">从磁盘选择文件</span>
+                    </span>
+                  </button>
+                </div>
+              </div>
             ) : null}
 
             {railTab === 'preset' ? (
@@ -488,6 +564,7 @@ export function GradePage({
               }}
             >
               <img
+                key={mediaSrc}
                 className="grade-image"
                 src={mediaSrc}
                 alt={item.name}
@@ -539,10 +616,11 @@ export function GradePage({
                   open={folds.curve}
                   onToggle={() => setFolds((current) => ({ ...current, curve: !current.curve }))}
                 >
-                  {slider('light.curve_highlights', '高光点', -100, 100, 1)}
-                  {slider('light.curve_lights', '亮部点', -100, 100, 1)}
-                  {slider('light.curve_darks', '暗部点', -100, 100, 1)}
-                  {slider('light.curve_shadows', '阴影点', -100, 100, 1)}
+                  {/* 曲线点写入 recipe.light.curve；后端 /v1/grade/preview 预留解析该字段 */}
+                  <CurveEditor
+                    points={curvePoints}
+                    onChange={(points) => update('light.curve', points)}
+                  />
                 </Disclosure>
               </>
             ) : (

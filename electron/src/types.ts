@@ -146,7 +146,7 @@ export interface OpenedPhoto {
 }
 
 export interface Recipe {
-  light: Record<string, number>
+  light: Record<string, number> & { curve?: Array<{ x: number; y: number }> }
   color: {
     temperature: number
     tint: number

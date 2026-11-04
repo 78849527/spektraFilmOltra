@@ -754,8 +754,9 @@
   aspect-ratio: 1.6 / 1;
   border-radius: 6px;
   background:
-    radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.04), transparent 62%),
-    var(--canvas);
+    radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.05), transparent 62%),
+    linear-gradient(to right, rgba(255, 140, 64, 0.16), rgba(64, 148, 255, 0.16)),
+    linear-gradient(to bottom, rgba(255, 84, 184, 0.13), rgba(84, 214, 128, 0.13)),    var(--canvas);
   border: 1px solid var(--hairline-faint);
   cursor: crosshair;
   overflow: hidden;
@@ -942,28 +943,87 @@
   min-height: 0;
 }
 
-.lut-row {
-  height: 32px;
+.lut-list {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 9px;
-  border-radius: 6px;
-  text-align: left;
-  color: var(--text-3);
-  font-size: 11px;
-  transition: background var(--motion-hover) var(--ease-out-expo), color var(--motion-hover) var(--ease-out-expo);
+  flex-direction: column;
+  gap: 6px;
 }
 
-.lut-row:hover {
+.lut-card {
+  border: 1px solid var(--hairline-faint);
+  border-radius: 8px;
   background: var(--surface-1);
+  overflow: hidden;
+  transition: border-color var(--motion-hover) var(--ease-out-expo), background var(--motion-hover) var(--ease-out-expo);
+}
+
+.lut-card:hover {
+  border-color: var(--hairline-strong);
+}
+
+.lut-card.active {
+  border-color: var(--accent-line);
+  background: var(--surface-2);
+}
+
+.lut-card-head {
+  height: 50px;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px;
+  text-align: left;
+}
+
+.lut-card-glyph {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: var(--canvas);
+  border: 1px solid var(--hairline-faint);
+  color: var(--text-3);
+}
+
+.lut-card.active .lut-card-glyph {
+  color: var(--accent-text);
+}
+
+.lut-card-title {
+  display: block;
+  font-size: 11.5px;
   color: var(--text-1);
 }
 
-.lut-row.active {
-  background: var(--accent-soft);
+.lut-card.active .lut-card-title {
   color: var(--accent-text);
-  box-shadow: inset 0 0 0 1px var(--accent-line);
+}
+
+.lut-card-sub {
+  display: block;
+  font-size: 9.5px;
+  color: var(--text-4);
+}
+
+.lut-card-body {
+  max-height: 0;
+  overflow: hidden;
+  padding: 0 10px;
+  transition: max-height var(--motion-state) var(--ease-out-expo), padding var(--motion-state) var(--ease-out-expo);
+}
+
+.lut-card.open .lut-card-body {
+  max-height: 96px;
+  padding-bottom: 10px;
+}
+
+.lut-card-import {
+  border-style: dashed;
+  background: transparent;
 }
 
 .preset-mini {
@@ -1148,4 +1208,90 @@
 .photo-meta-line .dot {
   margin: 0 7px;
   opacity: 0.32;
+}
+
+/* 调色台曲线 */
+.curve-editor {
+  width: 100%;
+  user-select: none;
+}
+
+.curve-editor svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  touch-action: none;
+}
+
+.curve-plot {
+  fill: var(--surface-1);
+  stroke: var(--hairline-faint);
+}
+
+.curve-grid {
+  stroke: var(--hairline-faint);
+  stroke-dasharray: 3 4;
+}
+
+.curve-line {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+}
+
+.curve-handle {
+  fill: var(--text-1);
+  stroke: #000;
+  stroke-width: 1.5;
+  cursor: grab;
+}
+
+.curve-handle:active {
+  cursor: grabbing;
+}
+
+.curve-handle:hover {
+  fill: var(--accent);
+}
+
+.curve-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.curve-hint {
+  font-size: 9.5px;
+  color: var(--text-4);
+}
+
+.curve-reset {
+  background: none;
+  border: 1px solid var(--hairline-faint);
+  border-radius: 5px;
+  padding: 2px 9px;
+  color: var(--text-3);
+  font: inherit;
+  font-size: 9.5px;
+  cursor: pointer;
+  transition: color var(--motion-hover) var(--ease-out-expo), border-color var(--motion-hover) var(--ease-out-expo);
+}
+
+.curve-reset:hover {
+  color: var(--text-1);
+  border-color: var(--hairline-strong);
+}
+
+/* 预览切换渐变 */
+@keyframes canvas-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.canvas-image,
+.grade-image {
+  animation: canvas-fade-in 180ms ease-out;
 }

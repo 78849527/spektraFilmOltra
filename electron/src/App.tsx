@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { errorMessage, request } from './api'
-import type { Bootstrap, HandoffInfo, ItemRecord, LibrarySnapshot } from './types'
+import type { Bootstrap, HandoffInfo, ItemRecord, LibrarySnapshot, OpenedPhoto } from './types'
 import { LibraryPage } from './pages/LibraryPage'
 import { EditorPage } from './pages/EditorPage'
 import { GradePage } from './pages/GradePage'
@@ -8,7 +8,7 @@ import { GradePage } from './pages/GradePage'
 type Route =
   | { kind: 'library' }
   | { kind: 'editor'; item: ItemRecord }
-  | { kind: 'grade'; item: ItemRecord; handoff: HandoffInfo }
+  | { kind: 'grade'; item: ItemRecord; handoff: HandoffInfo; photo: OpenedPhoto | null }
 
 interface ToastState {
   message: string
@@ -101,7 +101,7 @@ export default function App() {
             setRoute({ kind: 'library' })
             void refreshLibrary()
           }}
-          onGrade={(handoff) => setRoute({ kind: 'grade', item: route.item, handoff })}
+          onGrade={(handoff, photo) => setRoute({ kind: 'grade', item: route.item, handoff, photo })}
           onSwitchItem={(item) => setRoute({ kind: 'editor', item })}
           onNotify={notify}
         />
@@ -113,6 +113,7 @@ export default function App() {
           bootstrap={bootstrap}
           item={route.item}
           handoff={route.handoff}
+          photo={route.photo}
           onBack={async () => {
             const snapshot = await refreshLibrary()
             const fresh = snapshot.items.find((entry) => entry.id === route.item.id) ?? route.item

@@ -70,7 +70,7 @@ export function EditorPage({
   library: LibrarySnapshot
   item: ItemRecord
   onBack: () => void
-  onGrade: (handoff: HandoffInfo) => void
+  onGrade: (handoff: HandoffInfo, photo: OpenedPhoto | null) => void
   onSwitchItem: (item: ItemRecord) => void
   onNotify: (message: string, error?: boolean) => void
 }) {
@@ -92,6 +92,7 @@ export function EditorPage({
   const [exportOpen, setExportOpen] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [hintId, setHintId] = useState(0)
+  const [preflight, setPreflight] = useState<PreflightInfo | null>(null)
 
   const stateRef = useRef(state)
   const scaleRef = useRef(scale)
@@ -100,6 +101,7 @@ export function EditorPage({
   const renderSeqRef = useRef(0)
   const renderChainRef = useRef<Promise<void>>(Promise.resolve())
   const pendingTimerRef = useRef<number | null>(null)
+  const fastTimerRef = useRef<number | null>(null)
   const renderInFlightRef = useRef(false)
   const cancelSentRef = useRef(false)
   const commitChainRef = useRef<Promise<void>>(Promise.resolve())
@@ -174,6 +176,30 @@ export function EditorPage({
     },
     [onNotify],
   )
+
+  const submitFastPreview = useCallback((snapshot: StateTree, scaleValue: number) => {
+    const seq = ++renderSeqRef.current
+    void (async () => {
+      try {
+        await request('POST', '/v1/state', { state: snapshot })
+        const { job_id } = await request<{ job_id: string }>('POST', '/v1/preview/fast', {
+          scale: scaleValue,
+        })
+        const job = await waitForJob(job_id)
+        if (seq !== renderSeqRef.current) return
+        const result = job.result as unknown as {
+          image_path: string
+          width: number
+          height: number
+        }
+        setPreview({ path: result.image_path, width: result.width, height: result.height })
+        setBusy(false)
+        setProgress(null)
+      } catch {
+        // 预测帧失败不打扰用户，等真正的预览结果
+      }
+    })()
+  }, [])
 
   useEffect(() => {
     let active = true
@@ -258,6 +284,13 @@ export function EditorPage({
     if (JSON.stringify(state) === submittedKeyRef.current) return
     const snapshot = state
     if (pendingTimerRef.current) window.clearTimeout(pendingTimerRef.current)
+    if (fastTimerRef.current) window.clearTimeout(fastTimerRef.current)
+    if (Boolean(readPath(snapshot, 'simulation.auto_preview'))) {
+      fastTimerRef.current = window.setTimeout(() => {
+        fastTimerRef.current = null
+        void submitFastPreview(snapshot, scaleRef.current)
+      }, 150)
+    }
     if (renderInFlightRef.current && !cancelSentRef.current) {
       cancelSentRef.current = true
       void request('POST', '/v1/preview/cancel', {}).catch(() => undefined)
@@ -271,8 +304,9 @@ export function EditorPage({
     }, 1000)
     return () => {
       if (pendingTimerRef.current) window.clearTimeout(pendingTimerRef.current)
+      if (fastTimerRef.current) window.clearTimeout(fastTimerRef.current)
     }
-  }, [state, commitAndRender])
+  }, [state, commitAndRender, submitFastPreview])
 
   /* ── 缩放/平移：阻尼插值，逐帧直接写 DOM ── */
 
@@ -479,10 +513,21 @@ export function EditorPage({
       const job = await waitForJob(job_id, (status) => setProgress(status.progress))
       setProgress(null)
       const result = job.result as unknown as HandoffInfo
-      onGrade(result)
+      onGrade(result, photo)
     } catch (error) {
       onNotify(errorMessage(error), true)
       setProgress(null)
+    }
+  }
+
+  async function openExport() {
+    setExportOpen(true)
+    setPreflight(null)
+    try {
+      const result = await request<PreflightInfo>('POST', '/v1/preview/preflight', { edge: 256 })
+      setPreflight(result)
+    } catch {
+      // 预检失败不影响正常导出
     }
   }
 
@@ -591,7 +636,7 @@ export function EditorPage({
             <Icon name="sliders" size={12} />
             调色
           </button>
-          <button className="split-caret" onClick={() => setExportOpen(true)} title="导出设置">
+          <button className="split-caret" onClick={() => void openExport()} title="导出设置">
             <Icon name="chevronDown" size={11} />
           </button>
         </div>
@@ -736,7 +781,7 @@ export function EditorPage({
               <div className={`canvas-mat${borderOn && whitePadding > 0 ? '' : ' plain'}`} ref={matRef}>
                 {preview ? (
                   <div className="canvas-zoom" ref={zoomRef}>
-                    <img className="canvas-image" src={mediaSrc} alt={item.name} draggable={false} />
+                    <img key={mediaSrc} className="canvas-image" src={mediaSrc} alt={item.name} draggable={false} />
                     {compare && originalSrc ? (
                       <img
                         className="canvas-image original"
@@ -925,6 +970,15 @@ export function EditorPage({
           initial={bootstrap.export_settings}
           onClose={() => setExportOpen(false)}
           onConfirm={(settings) => void runExport(settings)}
+          notice={
+            preflight
+              ? !preflight.ok
+                ? preflight.warning
+                : preflight.effects.p99 > 0.5
+                  ? '预览为预测帧，不含颗粒/光晕等特效；导出会按完整精算生成。'
+                  : null
+              : '正在检查预览与精算的一致性…'
+          }
         />
       ) : null}
 
@@ -941,4 +995,11 @@ function filmIndexHue(id: string): number {
     hash = (hash * 31 + id.charCodeAt(index)) % 360
   }
   return hash
+}
+
+type PreflightInfo = {
+  model: { max: number; p99: number; mean: number }
+  effects: { max: number; p99: number; mean: number }
+  ok: boolean
+  warning: string
 }
