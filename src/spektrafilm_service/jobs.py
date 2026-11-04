@@ -57,8 +57,10 @@ class JobQueue:
         run: Callable[[Job], dict[str, object] | None],
         *,
         supersede_kind: str | None = None,
+        initial_label: str = '排队中',
     ) -> Job:
         job = Job(id=f'j_{next(self._seq)}', kind=kind, created_at=time.time())
+        job.progress = {'label': initial_label, 'index': 0, 'total': 1}
         with self._lock:
             if supersede_kind:
                 for queued_job, _ in list(self._queue):
@@ -75,6 +77,18 @@ class JobQueue:
             self._queue.append((job, run))
             self._wake.notify()
         return job
+
+    def cancel_kind(self, kind: str) -> None:
+        """把某类任务（排队中和正在跑的）全部作废。"""
+        with self._lock:
+            for queued_job, _ in list(self._queue):
+                if queued_job.kind == kind:
+                    queued_job.state = 'cancelled'
+                    queued_job.cancelled = True
+            self._queue = deque(item for item in self._queue if not item[0].cancelled)
+            for running_job in self._running.values():
+                if running_job.kind == kind:
+                    running_job.cancelled = True
 
     def cancel(self, job_id: str) -> bool:
         with self._lock:

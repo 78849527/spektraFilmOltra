@@ -8,9 +8,9 @@ import {
   shell,
   type MenuItemConstructorOptions,
 } from 'electron'
-import { createReadStream, existsSync } from 'node:fs'
+import { existsSync } from 'node:fs'
+import { appendFile, mkdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
-import { Readable } from 'node:stream'
 
 import { startSidecar, type SidecarHandle } from './sidecar'
 
@@ -57,15 +57,34 @@ function registerMediaProtocol(): void {
     if (!raw || !isAllowedMedia(raw) || !existsSync(raw)) {
       return new Response('not found', { status: 404 })
     }
-    const stream = Readable.toWeb(createReadStream(raw)) as ReadableStream
-    return new Response(stream, {
-      headers: {
-        'Content-Type': mimeFor(raw),
-        'Access-Control-Allow-Origin': '*',
-        'Cache-Control': 'no-store',
-      },
-    })
+    try {
+      // 整文件读取：页面切换会中断旧请求，流式返回容易被中断成未捕获的流错误。
+      const data = await readFile(raw)
+      return new Response(new Uint8Array(data), {
+        headers: {
+          'Content-Type': mimeFor(raw),
+          'Content-Length': String(data.byteLength),
+          'Access-Control-Allow-Origin': '*',
+          'Cache-Control': 'no-store',
+        },
+      })
+    } catch (error) {
+      logLine(`media read failed: ${raw} ${String(error)}`)
+      return new Response('not found', { status: 404 })
+    }
   })
+}
+
+function logLine(message: string): void {
+  try {
+    const dir = path.join(app.getPath('appData'), 'Spektrafilm', 'logs')
+    const line = `[${new Date().toISOString()}] ${message}\n`
+    void mkdir(dir, { recursive: true })
+      .then(() => appendFile(path.join(dir, 'electron.log'), line))
+      .catch(() => undefined)
+  } catch {
+    // app 尚未就绪时忽略
+  }
 }
 
 function buildMenu(): void {
@@ -219,6 +238,10 @@ function registerIpc(): void {
   ipcMain.handle('shell:reveal', async (_event, filePath: string) => {
     shell.showItemInFolder(filePath)
   })
+
+  ipcMain.handle('app:log-error', async (_event, message: string) => {
+    logLine(String(message))
+  })
 }
 
 app.whenReady().then(async () => {
@@ -239,6 +262,22 @@ app.whenReady().then(async () => {
       void createWindow()
     }
   })
+})
+
+app.on('render-process-gone', (_event, _contents, details) => {
+  logLine(`render-process-gone reason=${details.reason} exit=${details.exitCode}`)
+})
+
+app.on('child-process-gone', (_event, details) => {
+  logLine(`child-process-gone type=${details.type} reason=${details.reason}`)
+})
+
+process.on('uncaughtException', (error) => {
+  logLine(`main uncaughtException: ${error.stack ?? error.message}`)
+})
+
+process.on('unhandledRejection', (reason) => {
+  logLine(`main unhandledRejection: ${String(reason)}`)
 })
 
 app.on('before-quit', () => {

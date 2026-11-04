@@ -98,6 +98,10 @@ export function EditorPage({
   const readyRef = useRef(false)
   const submittedKeyRef = useRef('')
   const renderSeqRef = useRef(0)
+  const renderChainRef = useRef<Promise<void>>(Promise.resolve())
+  const pendingTimerRef = useRef<number | null>(null)
+  const renderInFlightRef = useRef(false)
+  const cancelSentRef = useRef(false)
   const commitChainRef = useRef<Promise<void>>(Promise.resolve())
   const canvasRef = useRef<HTMLDivElement>(null)
   const frameRef = useRef<HTMLDivElement>(null)
@@ -127,27 +131,46 @@ export function EditorPage({
   const whitePadding = typeof rawPadding === 'number' && Number.isFinite(rawPadding) ? rawPadding : 0.03
   chromeRef.current = { borderOn, whitePadding }
 
-  const startRender = useCallback(
-    async (scaleValue: number) => {
-      const seq = ++renderSeqRef.current
-      setBusy(true)
-      setProgress(null)
-      try {
-        const { job_id } = await request<{ job_id: string }>('POST', '/v1/preview', { scale: scaleValue })
-        const job = await waitForJob(job_id, (status) => {
-          if (seq === renderSeqRef.current) setProgress(status.progress)
-        })
-        if (seq !== renderSeqRef.current) return
-        const result = job.result as unknown as { image_path: string; width: number; height: number }
-        setPreview({ path: result.image_path, width: result.width, height: result.height })
+  const submitPreview = useCallback(
+    (scaleValue: number) => {
+      renderChainRef.current = renderChainRef.current.then(async () => {
+        const seq = ++renderSeqRef.current
+        renderInFlightRef.current = true
+        cancelSentRef.current = false
+        setBusy(true)
         setProgress(null)
-      } catch (error) {
-        if (seq !== renderSeqRef.current) return
-        const message = errorMessage(error)
-        if (!message.includes('取消')) onNotify(message, true)
-      } finally {
-        if (seq === renderSeqRef.current) setBusy(false)
-      }
+        try {
+          const { job_id } = await request<{ job_id: string }>('POST', '/v1/preview', {
+            scale: scaleValue,
+          })
+          void (async () => {
+            try {
+              const job = await waitForJob(job_id, (status) => {
+                if (seq === renderSeqRef.current) setProgress(status.progress)
+              })
+              if (seq !== renderSeqRef.current) return
+              const result = job.result as unknown as { image_path: string; width: number; height: number }
+              setPreview({ path: result.image_path, width: result.width, height: result.height })
+              setProgress(null)
+            } catch (error) {
+              if (seq !== renderSeqRef.current) return
+              const message = errorMessage(error)
+              if (!message.includes('取消')) onNotify(message, true)
+            } finally {
+              if (seq === renderSeqRef.current) {
+                renderInFlightRef.current = false
+                setBusy(false)
+              }
+            }
+          })()
+        } catch (error) {
+          if (seq === renderSeqRef.current) {
+            setBusy(false)
+            onNotify(errorMessage(error), true)
+          }
+        }
+      })
+      return renderChainRef.current
     },
     [onNotify],
   )
@@ -169,13 +192,15 @@ export function EditorPage({
         setQuick(pickQuick(await request<QuickPayload>('GET', '/v1/quick')))
         readyRef.current = true
         submittedKeyRef.current = JSON.stringify(opened.state)
-        await startRender(scaleRef.current)
+        void submitPreview(scaleRef.current)
+        setProgress(null)
       } catch (error) {
         if (active) onNotify(errorMessage(error), true)
       }
     })()
     return () => {
       active = false
+      if (pendingTimerRef.current) window.clearTimeout(pendingTimerRef.current)
     }
   }, [item.id, item.path])
 
@@ -197,7 +222,7 @@ export function EditorPage({
   )
 
   const commitAndRender = useCallback(
-    (snapshot: StateTree) => {
+    (snapshot: StateTree, options?: { force?: boolean; scale?: number }) => {
       const run = async () => {
         try {
           const key = JSON.stringify(snapshot)
@@ -207,31 +232,46 @@ export function EditorPage({
           setQuick(pickQuick(response))
           await saveItem(response.state)
           if (JSON.stringify(response.state) !== key) {
-            // 换胶片/相纸后后端会重捕基线，等新状态回流再渲染，避免重复出图。
+            // 换胶片/相纸后后端会重捕基线，等新状态回流再渲染。
             setState(response.state)
             return
           }
           const autoPreview = Boolean(readPath(response.state, 'simulation.auto_preview'))
-          if (autoPreview && key !== submittedKeyRef.current) {
+          if ((autoPreview && key !== submittedKeyRef.current) || options?.force) {
             submittedKeyRef.current = key
-            void startRender(scaleRef.current)
+            void submitPreview(options?.scale ?? scaleRef.current)
+          } else {
+            setProgress(null)
           }
         } catch (error) {
+          setProgress(null)
           onNotify(errorMessage(error), true)
         }
       }
       commitChainRef.current = commitChainRef.current.then(run, run)
       return commitChainRef.current
     },
-    [onNotify, saveItem, startRender],
+    [onNotify, saveItem, submitPreview],
   )
   useEffect(() => {
     if (!readyRef.current) return
+    if (JSON.stringify(state) === submittedKeyRef.current) return
     const snapshot = state
-    const timer = window.setTimeout(() => {
+    if (pendingTimerRef.current) window.clearTimeout(pendingTimerRef.current)
+    if (renderInFlightRef.current && !cancelSentRef.current) {
+      cancelSentRef.current = true
+      void request('POST', '/v1/preview/cancel', {}).catch(() => undefined)
+      setProgress({ label: '已中断，等待新参数…', index: 0, total: 1 })
+    } else if (!renderInFlightRef.current) {
+      setProgress({ label: '等待新参数…', index: 0, total: 1 })
+    }
+    pendingTimerRef.current = window.setTimeout(() => {
+      pendingTimerRef.current = null
       void commitAndRender(snapshot)
-    }, 320)
-    return () => window.clearTimeout(timer)
+    }, 1000)
+    return () => {
+      if (pendingTimerRef.current) window.clearTimeout(pendingTimerRef.current)
+    }
   }, [state, commitAndRender])
 
   /* ── 缩放/平移：阻尼插值，逐帧直接写 DOM ── */
@@ -379,7 +419,8 @@ export function EditorPage({
 
   function changeScale(next: number) {
     setScale(next)
-    void startRender(next)
+    if (pendingTimerRef.current) window.clearTimeout(pendingTimerRef.current)
+    void commitAndRender(stateRef.current, { force: true, scale: next })
   }
 
   function quickLocal(axis: string, value: number) {
@@ -430,6 +471,7 @@ export function EditorPage({
 
   async function openGrade() {
     try {
+      if (pendingTimerRef.current) window.clearTimeout(pendingTimerRef.current)
       await commitChainRef.current
       await request('POST', '/v1/state', { state: stateRef.current })
       await saveItem(stateRef.current)
@@ -448,6 +490,7 @@ export function EditorPage({
     setExportOpen(false)
     setExporting(true)
     try {
+      if (pendingTimerRef.current) window.clearTimeout(pendingTimerRef.current)
       await commitChainRef.current
       await request('POST', '/v1/state', { state: stateRef.current })
       const { job_id } = await request<{ job_id: string }>('POST', '/v1/export', { settings })
@@ -465,6 +508,7 @@ export function EditorPage({
 
   async function switchPhoto(next: ItemRecord) {
     try {
+      if (pendingTimerRef.current) window.clearTimeout(pendingTimerRef.current)
       await commitChainRef.current
       await request('POST', '/v1/state', { state: stateRef.current })
       await saveItem(stateRef.current)
@@ -476,6 +520,7 @@ export function EditorPage({
 
   async function leaveToLibrary() {
     try {
+      if (pendingTimerRef.current) window.clearTimeout(pendingTimerRef.current)
       await commitChainRef.current
       await request('POST', '/v1/state', { state: stateRef.current })
       await saveItem(stateRef.current)
@@ -496,7 +541,7 @@ export function EditorPage({
     return Array.from(groups.entries())
   }, [bootstrap.films])
 
-  const mediaSrc = preview ? `${mediaUrl(preview.path)}?v=${preview.path.slice(-12)}` : ''
+  const mediaSrc = preview?.path ? `${mediaUrl(preview.path)}?v=${preview.path.slice(-12)}` : ''
   const originalSrc = photo ? `${mediaUrl(photo.original_preview)}?v=compare` : ''
 
   const zoomOptions = useMemo(() => {
@@ -739,14 +784,18 @@ export function EditorPage({
             {progress ? (
               <div className="canvas-progress">
                 <span>{stageLabel(progress.label)}</span>
-                <div className="progress-track">
+                <div className={`progress-track${progress.index === 0 ? ' indeterminate' : ''}`}>
                   <div
                     className="progress-fill"
-                    style={{ width: `${progress.total ? (progress.index / progress.total) * 100 : 0}%` }}
+                    style={{
+                      width: progress.index === 0
+                        ? '38%'
+                        : `${progress.total ? (progress.index / progress.total) * 100 : 0}%`,
+                    }}
                   />
                 </div>
                 <span className="num">
-                  {progress.index}/{progress.total}
+                  {progress.index === 0 ? '…' : `${progress.index}/${progress.total}`}
                 </span>
               </div>
             ) : null}
@@ -758,16 +807,28 @@ export function EditorPage({
             ) : null}
 
             <div className="canvas-toolbar">
-              <button className="toolbar-text" onClick={() => changeScale(scale === 0.5 ? 1.0 : 0.5)}>
-                {scale === 0.5 ? '1/2' : '1/1'}
-                <Icon name="chevronDown" size={9} />
-              </button>
+              <select
+                className="select"
+                style={{ height: 24, fontSize: 10.5 }}
+                value={scale}
+                onChange={(event) => changeScale(Number(event.target.value))}
+              >
+                <option value={0.25}>1/4</option>
+                <option value={0.5}>1/2</option>
+                <option value={1}>1/1</option>
+              </select>
               <span className="v-hairline" style={{ height: 14, alignSelf: 'center' }} />
               <button className={`toolbar-text${compare ? ' active' : ''}`} onClick={() => setCompare(!compare)}>
                 <Icon name="compare" size={12} />
                 对比
               </button>
-              <button className="toolbar-text" onClick={() => void startRender(scale)}>
+              <button
+                className="toolbar-text"
+                onClick={() => {
+                  if (pendingTimerRef.current) window.clearTimeout(pendingTimerRef.current)
+                  void commitAndRender(stateRef.current, { force: true, scale })
+                }}
+              >
                 渲染
               </button>
               <span className="v-hairline" style={{ height: 14, alignSelf: 'center' }} />

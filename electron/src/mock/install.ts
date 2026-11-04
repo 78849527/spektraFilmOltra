@@ -7,6 +7,7 @@ export function installMockBridge(): void {
   window.spektra = {
     request: async (method, endpoint, body) =>
       engine.handle(method, endpoint, body as Record<string, unknown> | undefined),
+    logError: async () => {},
     mediaUrl: engine.mediaUrl,
     pickFolder: engine.pickFolder,
     pickImages: engine.pickImages,

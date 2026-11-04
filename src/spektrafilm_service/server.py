@@ -70,6 +70,10 @@ class Api:
             job = self.session.submit_preview(scale)
             return 200, {'job_id': job.id}
 
+        if method == 'POST' and path == '/v1/preview/cancel':
+            self.session.cancel_preview()
+            return 200, {'ok': True}
+
         if method == 'POST' and path == '/v1/export':
             job = self.session.submit_export(body.get('settings'))
             return 200, {'job_id': job.id}
@@ -132,6 +136,10 @@ class Api:
 
         if method == 'POST' and path == '/v1/grade/luts/remove':
             return 200, self.grade.remove_lut(str(body.get('path') or ''))
+
+        if method == 'POST' and path == '/v1/grade/preview/cancel':
+            self.grade.cancel_preview()
+            return 200, {'ok': True}
 
         if method == 'POST' and path == '/v1/grade/preview':
             job = self.grade.submit_preview(

@@ -9,8 +9,11 @@ import { formatBytes, formatSize } from '../state'
 import type { Bootstrap, ExportSettings, HandoffInfo, ItemRecord, PresetEntry, Recipe } from '../types'
 import './pages.css'
 
+const PROXY_EDGE = 800
+const FULL_EDGE = 1600
+
 interface GradePreview {
-  image_path: string
+  path: string
   width: number
   height: number
   analysis: {
@@ -79,7 +82,7 @@ export function GradePage({
   onBack: () => void
   onNotify: (message: string, error?: boolean) => void
 }) {
-  const [recipe, setRecipe] = useState<Recipe>(() => bootstrap.grade_recipe)
+  const [recipe, setRecipe] = useState<Recipe>(() => bootstrap.grade_recipe ?? ({} as Recipe))
   const [tab, setTab] = useState<'light' | 'color'>('light')
   const [preview, setPreview] = useState<GradePreview | null>(null)
   const [busy, setBusy] = useState(false)
@@ -103,33 +106,101 @@ export function GradePage({
   const railRef = useSmoothScroll<HTMLDivElement>('y')
   const panelRef = useSmoothScroll<HTMLDivElement>('y')
 
-  const renderPreview = useCallback(
-    async (nextRecipe: Recipe) => {
-      setBusy(true)
-      try {
-        const { job_id } = await request<{ job_id: string }>('POST', '/v1/grade/preview', {
-          handoff: handoff.path,
-          recipe: nextRecipe,
-          edge: 1600,
-        })
-        const job = await waitForJob(job_id)
-        setPreview(job.result as unknown as GradePreview)
-      } catch (error) {
-        const message = errorMessage(error)
-        if (!message.includes('取消')) onNotify(message, true)
-      } finally {
-        setBusy(false)
-      }
+  const renderSeqRef = useRef(0)
+  const renderChainRef = useRef<Promise<void>>(Promise.resolve())
+  const renderInFlightRef = useRef(false)
+  const cancelSentRef = useRef(false)
+  const proxyTimerRef = useRef<number | null>(null)
+  const settleTimerRef = useRef<number | null>(null)
+
+  const submitPreview = useCallback(
+    (edge: number, nextRecipe: Recipe) => {
+      renderChainRef.current = renderChainRef.current.then(async () => {
+        const seq = ++renderSeqRef.current
+        renderInFlightRef.current = true
+        cancelSentRef.current = false
+        setBusy(true)
+        try {
+          const { job_id } = await request<{ job_id: string }>('POST', '/v1/grade/preview', {
+            handoff: handoff.path,
+            recipe: nextRecipe,
+            edge,
+          })
+          void (async () => {
+            try {
+              const job = await waitForJob(job_id)
+              if (seq !== renderSeqRef.current) return
+              const result = job.result as unknown as {
+                image_path: string
+                width: number
+                height: number
+                analysis: GradePreview['analysis']
+              }
+              if (!result?.image_path) return
+              setPreview({
+                path: result.image_path,
+                width: result.width,
+                height: result.height,
+                analysis: result.analysis,
+              })
+            } catch (error) {
+              if (seq !== renderSeqRef.current) return
+              const message = errorMessage(error)
+              if (!message.includes('取消')) onNotify(message, true)
+            } finally {
+              if (seq === renderSeqRef.current) {
+                renderInFlightRef.current = false
+                setBusy(false)
+              }
+            }
+          })()
+        } catch (error) {
+          if (seq === renderSeqRef.current) {
+            setBusy(false)
+            onNotify(errorMessage(error), true)
+          }
+        }
+      })
+      return renderChainRef.current
     },
     [handoff.path, onNotify],
   )
 
   useEffect(() => {
-    const timer = window.setTimeout(() => {
-      void renderPreview(recipeRef.current)
-    }, 120)
-    return () => window.clearTimeout(timer)
-  }, [recipe, handoff.path, renderPreview])
+    if (renderInFlightRef.current && !cancelSentRef.current) {
+      cancelSentRef.current = true
+      void request('POST', '/v1/grade/preview/cancel', {}).catch(() => undefined)
+    }
+    if (settleTimerRef.current) {
+      window.clearTimeout(settleTimerRef.current)
+      settleTimerRef.current = null
+    }
+    // 交互期用代理图：拖拽过程中每 120ms 最多提交一次，始终取最新配方。
+    if (proxyTimerRef.current === null) {
+      proxyTimerRef.current = window.setTimeout(() => {
+        proxyTimerRef.current = null
+        void submitPreview(PROXY_EDGE, recipeRef.current)
+      }, 120)
+    }
+    settleTimerRef.current = window.setTimeout(() => {
+      settleTimerRef.current = null
+      void submitPreview(FULL_EDGE, recipeRef.current)
+    }, 1100)
+    return () => {
+      if (settleTimerRef.current) {
+        window.clearTimeout(settleTimerRef.current)
+        settleTimerRef.current = null
+      }
+    }
+  }, [recipe, handoff.path, submitPreview])
+
+  useEffect(
+    () => () => {
+      if (proxyTimerRef.current) window.clearTimeout(proxyTimerRef.current)
+      if (settleTimerRef.current) window.clearTimeout(settleTimerRef.current)
+    },
+    [],
+  )
 
   useEffect(() => {
     ;(async () => {
@@ -152,6 +223,7 @@ export function GradePage({
   }
 
   function applyPreset(preset: PresetEntry) {
+    if (!preset.recipe) return
     setRecipe(preset.recipe)
     setActivePreset(preset.id)
   }
@@ -243,7 +315,7 @@ export function GradePage({
   )
 
   const activePresetEntry = presets.find((preset) => preset.id === activePreset)
-  const mediaSrc = preview ? `${mediaUrl(preview.image_path)}?v=${preview.image_path.slice(-12)}` : ''
+  const mediaSrc = preview?.path ? `${mediaUrl(preview.path)}?v=${preview.path.slice(-12)}` : ''
 
   const fitScale = useMemo(() => {
     if (!preview || canvasSize.width === 0) return 1
@@ -309,7 +381,7 @@ export function GradePage({
             {railTab === 'lut' ? (
               <>
                 <button
-                  className={`lut-row${recipe.lut.path === '' ? ' active' : ''}`}
+                  className={`lut-row${(recipe.lut?.path ?? '') === '' ? ' active' : ''}`}
                   onClick={() => update('lut.path', '')}
                 >
                   无 LUT
@@ -317,7 +389,7 @@ export function GradePage({
                 {luts.map((lut) => (
                   <button
                     key={lut.path}
-                    className={`lut-row${recipe.lut.path === lut.path ? ' active' : ''}`}
+                    className={`lut-row${recipe.lut?.path === lut.path ? ' active' : ''}`}
                     onClick={() => update('lut.path', lut.path)}
                   >
                     <Icon name="sliders" size={12} />
@@ -442,7 +514,7 @@ export function GradePage({
           </div>
           <div className="inspector-body" ref={panelRef}>
             <Histogram src={mediaSrc} />
-            {preview ? (
+            {preview?.analysis ? (
               <div className="analysis-line">
                 <span className="truncate">黑场 {preview.analysis.black_point.toFixed(2)}</span>
                 <span className="truncate">白场 {preview.analysis.white_point.toFixed(2)}</span>
