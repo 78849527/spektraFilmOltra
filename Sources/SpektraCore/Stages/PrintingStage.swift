@@ -64,7 +64,7 @@ final class PrintingStage {
         )
     }
 
-    private func filmCMYToPrintLogRaw(_ cmyFilmDensity: ImageRGB) -> ImageRGB {
+    private func printResponse() -> (sensitivity: [[Double]], illuminant: [Double]) {
         let logSensitivity = printProfile.data.logSensitivity
         var sensitivity = [[Double]](repeating: [0, 0, 0], count: logSensitivity.count)
         for w in 0..<logSensitivity.count {
@@ -74,7 +74,19 @@ final class PrintingStage {
             }
         }
         let lightSource = (try? Illuminants.standard(enlarger.illuminant)) ?? []
-        let printIlluminant = enlargerService.filteredIlluminant(lightSource)
+        return (sensitivity, enlargerService.filteredIlluminant(lightSource))
+    }
+
+    /// LUT 预览用：当前补偿设置下的中灰曝光因子（不经过 LUT）。
+    func rawExposureFactorMidgray() -> Double {
+        let response = printResponse()
+        return computeExposureFactorMidgray(
+            sensitivity: response.sensitivity, printIlluminant: response.illuminant
+        )
+    }
+
+    private func filmCMYToPrintLogRaw(_ cmyFilmDensity: ImageRGB) -> ImageRGB {
+        let (sensitivity, printIlluminant) = printResponse()
         let densitySpectral = DensityCurves.computeDensitySpectral(
             channelDensity: film.data.channelDensity,
             densityCMY: cmyFilmDensity,
@@ -97,6 +109,7 @@ final class PrintingStage {
         let factor = computeExposureFactorMidgray(sensitivity: sensitivity, printIlluminant: printIlluminant)
         raw = raw.map { $0 * factor }
         if enlarger.preflashExposure > 0 {
+            let lightSource = (try? Illuminants.standard(enlarger.illuminant)) ?? []
             let preflashIlluminant = enlargerService.preflashIlluminant(lightSource)
             let baseDensity = film.data.baseDensity
             for p in 0..<pixelCount {

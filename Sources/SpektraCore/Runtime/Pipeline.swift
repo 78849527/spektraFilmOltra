@@ -1,5 +1,14 @@
 import Foundation
 
+/// 管线内可进入/退出的 tap，用于 LUT 预览的四段烘焙。
+enum PipelineTap {
+    case rgbIn
+    case logEFilm
+    case cmyFilm
+    case logEPrint
+    case rgbOut
+}
+
 struct PipelineResult {
     var rgbIn: ImageRGB
     var rgbPre: ImageRGB
@@ -180,6 +189,60 @@ final class SimulationPipeline {
             logEPrint: keepTaps ? logPrint : empty,
             cmyPrint: keepTaps ? cmyPrint : empty, rgbOut: out
         )
+    }
+
+    /// 从指定 tap 进入、在指定 tap 退出，跳过前/后阶段；用于 LUT 预览烘焙。
+    /// `inject != .rgbIn` 时不做 preprocess，按输入图长边更新胶片/印相像素尺寸。
+    func processSegment(_ input: ImageRGB, inject: PipelineTap,
+                        collect: PipelineTap) -> ImageRGB {
+        guard input.width > 0, input.height > 0 else { return input }
+        if inject != .rgbIn {
+            let longEdge = max(input.width, input.height)
+            let pixelSize = params.camera.filmFormatMM * 1000 / Double(max(longEdge, 1))
+            filming.pixelSizeUM = pixelSize
+            printing.pixelSizeUM = pixelSize
+        }
+        if inject == collect { return input }
+
+        var image = input
+        if inject == .rgbIn {
+            image = preprocess(input)
+            if collect == .rgbIn { return image }
+        }
+
+        if inject == .rgbIn || inject == .logEFilm {
+            if inject == .rgbIn { image = filming.expose(image) }
+            if collect == .logEFilm { return image }
+            image = filming.develop(image)
+            if collect == .cmyFilm { return image }
+        }
+
+        if params.io.scanFilm {
+            if collect == .rgbOut {
+                return scanning.scan(densityChannels: image).sanitizedNonFinite()
+            }
+            return image
+        }
+
+        if inject == .cmyFilm {
+            image = printing.expose(cmyFilmDensity: image)
+            if collect == .logEPrint { return image }
+        } else if inject == .logEPrint || inject == .rgbOut {
+            if collect == .logEPrint { return image }
+        }
+
+        image = printing.develop(logRaw: image)
+        return scanning.scan(densityChannels: image).sanitizedNonFinite()
+    }
+
+    /// LUT 预览：按相机曝光补偿重算印相中灰补偿密度。
+    func updatePreviewCompensationMidgray(exposureEV: Double) {
+        filming.updateCompensationMidgray(exposureEV: exposureEV)
+    }
+
+    /// LUT 预览：当前补偿设置下的印相中灰曝光因子。
+    func previewPrintExposureFactor() -> Double {
+        printing.rawExposureFactorMidgray()
     }
 
     private func preprocess(_ input: ImageRGB) -> ImageRGB {

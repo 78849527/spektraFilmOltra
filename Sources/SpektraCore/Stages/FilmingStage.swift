@@ -37,6 +37,16 @@ final class FilmingStage {
         }
     }
 
+    /// LUT 预览用：按相机曝光补偿更新印相中灰补偿密度（与 init 中的逻辑一致）。
+    func updateCompensationMidgray(exposureEV: Double) {
+        guard enlargerService.printExposureCompensation else { return }
+        let scale = pow(2, exposureEV)
+        enlargerService.densitySpectralMidgrayComp = simpleRGBToDensitySpectral(
+            ImageRGB(width: 1, height: 1,
+                     data: [0.184 * scale, 0.184 * scale, 0.184 * scale])
+        )
+    }
+
     func autoExposure(_ image: ImageRGB) -> ImageRGB {
         guard camera.autoExposure else { return image }
         let small = Resize.smallPreview(image, maxSize: 256)
