@@ -16,25 +16,29 @@ enum AdaptiveClarityEngine {
 
     static func optimize(_ image: ImageRGB, mode: ClarityMode,
                          validateResult: Bool = true,
+                         workingLongEdge: Int = 0,
                          shouldCancel: (() -> Bool)? = nil) throws -> ClarityResult {
         let analysis = try analyze(image, mode: mode)
         let controls = suggestedControls(for: analysis)
         return try process(
             image, analysis: analysis, controls: controls,
-            mode: mode, validateResult: validateResult, shouldCancel: shouldCancel
+            mode: mode, validateResult: validateResult,
+            workingLongEdge: workingLongEdge, shouldCancel: shouldCancel
         )
     }
 
     static func process(_ image: ImageRGB, analysis: ClarityAnalysis,
                         controls: ClarityControls, mode: ClarityMode,
                         validateResult: Bool = true,
+                        workingLongEdge: Int = 0,
                         shouldCancel: (() -> Bool)? = nil) throws -> ClarityResult {
         guard image.width > 0, image.height > 0 else { throw ClarityError.emptyImage }
         let linearInput = ClarityMath.srgbToLinearImage(image)
         var scales = ClarityModuleScale()
         var output = try processOnce(
             linearInput, analysis: analysis, controls: controls,
-            mode: mode, scales: scales, shouldCancel: shouldCancel
+            mode: mode, scales: scales, workingLongEdge: workingLongEdge,
+            shouldCancel: shouldCancel
         )
         var validation: ClarityValidation
         if validateResult {
@@ -59,7 +63,8 @@ enum AdaptiveClarityEngine {
             }
             output = try processOnce(
                 linearInput, analysis: analysis, controls: controls,
-                mode: mode, scales: scales, shouldCancel: shouldCancel
+                mode: mode, scales: scales, workingLongEdge: workingLongEdge,
+                shouldCancel: shouldCancel
             )
             output.plan.rollbackApplied = true
             validation = validate(
@@ -83,7 +88,7 @@ enum AdaptiveClarityEngine {
 
     private static func processOnce(_ linear: ImageRGB, analysis: ClarityAnalysis,
                                     controls: ClarityControls, mode: ClarityMode,
-                                    scales: ClarityModuleScale,
+                                    scales: ClarityModuleScale, workingLongEdge: Int,
                                     shouldCancel: (() -> Bool)?) throws -> ProcessOutput {
         func checkCancel() throws {
             if shouldCancel?() == true { throw ClarityError.cancelled }
@@ -106,7 +111,8 @@ enum AdaptiveClarityEngine {
 
         let local = ClarityProcessors.localContrast(
             current, analysis: analysis, controls: controls,
-            scale: scales.localContrast, mode: mode
+            scale: scales.localContrast, mode: mode,
+            workingLongEdge: workingLongEdge, hazeStrength: dehaze.strength
         )
         current = local.image
         try checkCancel()

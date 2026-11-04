@@ -1,4 +1,5 @@
 import Foundation
+import Dispatch
 
 enum ClarityMath {
     static let epsilon = 0.0001
@@ -17,6 +18,15 @@ enum ClarityMath {
         if edge1 <= edge0 { return value >= edge1 ? 1 : 0 }
         let t = clamp((value - edge0) / (edge1 - edge0), 0, 1)
         return t * t * (3 - 2 * t)
+    }
+
+    @inline(__always)
+    static func parallelFor(rows: Int, _ body: (Int) -> Void) {
+        if rows >= 64 {
+            DispatchQueue.concurrentPerform(iterations: rows, execute: body)
+        } else {
+            for row in 0..<rows { body(row) }
+        }
     }
 
     @inline(__always)
@@ -52,17 +62,29 @@ enum ClarityMath {
 
     static func srgbToLinearImage(_ image: ImageRGB) -> ImageRGB {
         var output = image
-        for i in 0..<output.data.count {
-            output.data[i] = srgbToLinear(output.data[i])
+        output.data.withUnsafeMutableBufferPointer { buffer in
+            guard let base = buffer.baseAddress else { return }
+            parallelFor(rows: image.height) { y in
+                let start = y * image.width * 3
+                for i in start..<(start + image.width * 3) {
+                    base[i] = srgbToLinear(image.data[i])
+                }
+            }
         }
         return output
     }
 
     static func linearToSRGBImage(_ image: ImageRGB, clampToUnit: Bool = true) -> ImageRGB {
         var output = image
-        for i in 0..<output.data.count {
-            let value = linearToSRGB(output.data[i])
-            output.data[i] = clampToUnit ? clamp(value, 0, 1) : value
+        output.data.withUnsafeMutableBufferPointer { buffer in
+            guard let base = buffer.baseAddress else { return }
+            parallelFor(rows: image.height) { y in
+                let start = y * image.width * 3
+                for i in start..<(start + image.width * 3) {
+                    let value = linearToSRGB(image.data[i])
+                    base[i] = clampToUnit ? clamp(value, 0, 1) : value
+                }
+            }
         }
         return output
     }
@@ -70,10 +92,16 @@ enum ClarityMath {
     static func luminancePlane(_ image: ImageRGB) -> [Double] {
         let count = image.width * image.height
         var output = [Double](repeating: 0, count: count)
-        for i in 0..<count {
-            output[i] = luminance(
-                image.data[i * 3], image.data[i * 3 + 1], image.data[i * 3 + 2]
-            )
+        output.withUnsafeMutableBufferPointer { buffer in
+            guard let base = buffer.baseAddress else { return }
+            parallelFor(rows: image.height) { y in
+                for x in 0..<image.width {
+                    let i = y * image.width + x
+                    base[i] = luminance(
+                        image.data[i * 3], image.data[i * 3 + 1], image.data[i * 3 + 2]
+                    )
+                }
+            }
         }
         return output
     }
@@ -151,13 +179,23 @@ enum ClarityMath {
         var l = [Double](repeating: 0, count: count)
         var a = [Double](repeating: 0, count: count)
         var b = [Double](repeating: 0, count: count)
-        for i in 0..<count {
-            let lab = oklab(fromLinear: Vec3(
-                image.data[i * 3], image.data[i * 3 + 1], image.data[i * 3 + 2]
-            ))
-            l[i] = lab.x
-            a[i] = lab.y
-            b[i] = lab.z
+        l.withUnsafeMutableBufferPointer { lb in
+            a.withUnsafeMutableBufferPointer { ab in
+                b.withUnsafeMutableBufferPointer { bb in
+                    guard let lp = lb.baseAddress, let ap = ab.baseAddress, let bp = bb.baseAddress else { return }
+                    parallelFor(rows: image.height) { y in
+                        for x in 0..<image.width {
+                            let i = y * image.width + x
+                            let lab = oklab(fromLinear: Vec3(
+                                image.data[i * 3], image.data[i * 3 + 1], image.data[i * 3 + 2]
+                            ))
+                            lp[i] = lab.x
+                            ap[i] = lab.y
+                            bp[i] = lab.z
+                        }
+                    }
+                }
+            }
         }
         return (l, a, b)
     }
@@ -221,7 +259,7 @@ enum ClarityMath {
         }
     }
 
-    static func percentile(_ values: [Double], _ percent: Double, maxSamples: Int = 200_000) -> Double {
+    static func percentile(_ values: [Double], _ percent: Double, maxSamples: Int = 100_000) -> Double {
         guard !values.isEmpty else { return 0 }
         let step = max(1, values.count / maxSamples)
         var sample: [Double] = []
@@ -296,25 +334,30 @@ enum ClarityMath {
     static func boxBlur(_ input: [Double], width: Int, height: Int, radius: Int) -> [Double] {
         guard radius > 0, width > 0, height > 0 else { return input }
         var horizontal = [Double](repeating: 0, count: input.count)
-        var prefix = [Double](repeating: 0, count: max(width, height) + 1)
-        for y in 0..<height {
-            let row = y * width
-            prefix[0] = 0
-            for x in 0..<width { prefix[x + 1] = prefix[x] + input[row + x] }
-            for x in 0..<width {
-                let low = max(0, x - radius)
-                let high = min(width - 1, x + radius)
-                horizontal[row + x] = (prefix[high + 1] - prefix[low]) / Double(high - low + 1)
+        horizontal.withUnsafeMutableBufferPointer { buffer in
+            guard let base = buffer.baseAddress else { return }
+            parallelFor(rows: height) { y in
+                let row = y * width
+                var prefix = [Double](repeating: 0, count: width + 1)
+                for x in 0..<width { prefix[x + 1] = prefix[x] + input[row + x] }
+                for x in 0..<width {
+                    let low = max(0, x - radius)
+                    let high = min(width - 1, x + radius)
+                    base[row + x] = (prefix[high + 1] - prefix[low]) / Double(high - low + 1)
+                }
             }
         }
         var output = [Double](repeating: 0, count: input.count)
-        for x in 0..<width {
-            prefix[0] = 0
-            for y in 0..<height { prefix[y + 1] = prefix[y] + horizontal[y * width + x] }
-            for y in 0..<height {
-                let low = max(0, y - radius)
-                let high = min(height - 1, y + radius)
-                output[y * width + x] = (prefix[high + 1] - prefix[low]) / Double(high - low + 1)
+        output.withUnsafeMutableBufferPointer { buffer in
+            guard let base = buffer.baseAddress else { return }
+            parallelFor(rows: width) { x in
+                var prefix = [Double](repeating: 0, count: height + 1)
+                for y in 0..<height { prefix[y + 1] = prefix[y] + horizontal[y * width + x] }
+                for y in 0..<height {
+                    let low = max(0, y - radius)
+                    let high = min(height - 1, y + radius)
+                    base[y * width + x] = (prefix[high + 1] - prefix[low]) / Double(high - low + 1)
+                }
             }
         }
         return output
@@ -323,23 +366,29 @@ enum ClarityMath {
     static func minFilter(_ input: [Double], width: Int, height: Int, radius: Int) -> [Double] {
         guard radius > 0 else { return input }
         var horizontal = [Double](repeating: 0, count: input.count)
-        for y in 0..<height {
-            for x in 0..<width {
-                var value = Double.greatestFiniteMagnitude
-                for k in max(0, x - radius)...min(width - 1, x + radius) {
-                    value = min(value, input[y * width + k])
+        horizontal.withUnsafeMutableBufferPointer { buffer in
+            guard let base = buffer.baseAddress else { return }
+            parallelFor(rows: height) { y in
+                for x in 0..<width {
+                    var value = Double.greatestFiniteMagnitude
+                    for k in max(0, x - radius)...min(width - 1, x + radius) {
+                        value = min(value, input[y * width + k])
+                    }
+                    base[y * width + x] = value
                 }
-                horizontal[y * width + x] = value
             }
         }
         var output = [Double](repeating: 0, count: input.count)
-        for x in 0..<width {
-            for y in 0..<height {
-                var value = Double.greatestFiniteMagnitude
-                for k in max(0, y - radius)...min(height - 1, y + radius) {
-                    value = min(value, horizontal[k * width + x])
+        output.withUnsafeMutableBufferPointer { buffer in
+            guard let base = buffer.baseAddress else { return }
+            parallelFor(rows: width) { x in
+                for y in 0..<height {
+                    var value = Double.greatestFiniteMagnitude
+                    for k in max(0, y - radius)...min(height - 1, y + radius) {
+                        value = min(value, horizontal[k * width + x])
+                    }
+                    base[y * width + x] = value
                 }
-                output[y * width + x] = value
             }
         }
         return output
@@ -348,23 +397,29 @@ enum ClarityMath {
     static func maxFilter(_ input: [Double], width: Int, height: Int, radius: Int) -> [Double] {
         guard radius > 0 else { return input }
         var horizontal = [Double](repeating: 0, count: input.count)
-        for y in 0..<height {
-            for x in 0..<width {
-                var value = -Double.greatestFiniteMagnitude
-                for k in max(0, x - radius)...min(width - 1, x + radius) {
-                    value = max(value, input[y * width + k])
+        horizontal.withUnsafeMutableBufferPointer { buffer in
+            guard let base = buffer.baseAddress else { return }
+            parallelFor(rows: height) { y in
+                for x in 0..<width {
+                    var value = -Double.greatestFiniteMagnitude
+                    for k in max(0, x - radius)...min(width - 1, x + radius) {
+                        value = max(value, input[y * width + k])
+                    }
+                    base[y * width + x] = value
                 }
-                horizontal[y * width + x] = value
             }
         }
         var output = [Double](repeating: 0, count: input.count)
-        for x in 0..<width {
-            for y in 0..<height {
-                var value = -Double.greatestFiniteMagnitude
-                for k in max(0, y - radius)...min(height - 1, y + radius) {
-                    value = max(value, horizontal[k * width + x])
+        output.withUnsafeMutableBufferPointer { buffer in
+            guard let base = buffer.baseAddress else { return }
+            parallelFor(rows: width) { x in
+                for y in 0..<height {
+                    var value = -Double.greatestFiniteMagnitude
+                    for k in max(0, y - radius)...min(height - 1, y + radius) {
+                        value = max(value, horizontal[k * width + x])
+                    }
+                    base[y * width + x] = value
                 }
-                output[y * width + x] = value
             }
         }
         return output

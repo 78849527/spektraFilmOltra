@@ -68,14 +68,20 @@ enum ClarityProcessors {
 
         let airlight = analysis.airlight
         var output = image
-        for i in 0..<count {
-            let t = max(transmission[i], 0.35)
-            let weight = strength * sky[i] * edge[i]
-            for c in 0..<3 {
-                let value = image.data[i * 3 + c]
-                let air = c == 0 ? airlight.x : (c == 1 ? airlight.y : airlight.z)
-                let recovered = max((value - air) / t + air, 0)
-                output.data[i * 3 + c] = value + weight * (recovered - value)
+        output.data.withUnsafeMutableBufferPointer { buffer in
+            guard let base = buffer.baseAddress else { return }
+            ClarityMath.parallelFor(rows: height) { y in
+                for x in 0..<width {
+                    let i = y * width + x
+                    let t = max(transmission[i], 0.35)
+                    let weight = strength * sky[i] * edge[i]
+                    for c in 0..<3 {
+                        let value = image.data[i * 3 + c]
+                        let air = c == 0 ? airlight.x : (c == 1 ? airlight.y : airlight.z)
+                        let recovered = max((value - air) / t + air, 0)
+                        base[i * 3 + c] = value + weight * (recovered - value)
+                    }
+                }
             }
         }
         return DehazeResult(image: output, enabled: true, strength: strength)
@@ -136,36 +142,28 @@ enum ClarityProcessors {
                 count: 1024
             )
             var output = image
-            var high = 0
-            var low = 0
-            for i in 0..<(image.width * image.height) {
-                let r = image.data[i * 3]
-                let g = image.data[i * 3 + 1]
-                let b = image.data[i * 3 + 2]
-                let y = ClarityMath.luminance(r, g, b)
-                if y < 0.0005 { continue }
-                let mapped = ClarityMath.expLog(lut.sample(ClarityMath.logY(y)))
-                var factor = mapped / y
-                factor = ClarityMath.clamp(factor, 0.25, 4.0)
-                let maxChannel = max(r, g, b)
-                if maxChannel * factor > 1 {
-                    factor = 1.0 / max(maxChannel, 1e-9)
+            output.data.withUnsafeMutableBufferPointer { buffer in
+                guard let base = buffer.baseAddress else { return }
+                ClarityMath.parallelFor(rows: image.height) { row in
+                    for x in 0..<image.width {
+                        let i = row * image.width + x
+                        let r = image.data[i * 3]
+                        let g = image.data[i * 3 + 1]
+                        let b = image.data[i * 3 + 2]
+                        let y = ClarityMath.luminance(r, g, b)
+                        if y < 0.0005 { continue }
+                        let mapped = ClarityMath.expLog(lut.sample(ClarityMath.logY(y)))
+                        var factor = mapped / y
+                        factor = ClarityMath.clamp(factor, 0.25, 4.0)
+                        let maxChannel = max(r, g, b)
+                        if maxChannel * factor > 1 {
+                            factor = 1.0 / max(maxChannel, 1e-9)
+                        }
+                        base[i * 3] = r * factor
+                        base[i * 3 + 1] = g * factor
+                        base[i * 3 + 2] = b * factor
+                    }
                 }
-                output.data[i * 3] = r * factor
-                output.data[i * 3 + 1] = g * factor
-                output.data[i * 3 + 2] = b * factor
-                let outY = ClarityMath.luminance(
-                    output.data[i * 3], output.data[i * 3 + 1], output.data[i * 3 + 2]
-                )
-                if outY > 0.99 { high += 1 }
-                if outY < 0.001 { low += 1 }
-            }
-            let highClip = Double(high) / Double(max(image.width * image.height, 1))
-            let lowClip = Double(low) / Double(max(image.width * image.height, 1))
-            let highDelta = highClip - inputHighClip
-            let lowDelta = lowClip - inputLowClip
-            if highDelta > 0.003 || lowDelta > 0.003 {
-                return (output, black, white)
             }
             return (output, black, white)
         }
@@ -189,13 +187,22 @@ enum ClarityProcessors {
 
     private static func clipFraction(image: ImageRGB, high: Bool) -> Double {
         let count = image.width * image.height
-        var clipped = 0
-        for i in 0..<count {
-            let y = ClarityMath.luminance(
-                image.data[i * 3], image.data[i * 3 + 1], image.data[i * 3 + 2]
-            )
-            if high ? y > 0.99 : y < 0.001 { clipped += 1 }
+        var rowCounts = [Int](repeating: 0, count: image.height)
+        rowCounts.withUnsafeMutableBufferPointer { buffer in
+            guard let base = buffer.baseAddress else { return }
+            ClarityMath.parallelFor(rows: image.height) { row in
+                var clipped = 0
+                for x in 0..<image.width {
+                    let i = row * image.width + x
+                    let y = ClarityMath.luminance(
+                        image.data[i * 3], image.data[i * 3 + 1], image.data[i * 3 + 2]
+                    )
+                    if high ? y > 0.99 : y < 0.001 { clipped += 1 }
+                }
+                base[row] = clipped
+            }
         }
+        let clipped = rowCounts.reduce(0, +)
         return Double(clipped) / Double(max(count, 1))
     }
 
@@ -203,29 +210,59 @@ enum ClarityProcessors {
 
     static func localContrast(_ image: ImageRGB, analysis: ClarityAnalysis,
                               controls: ClarityControls, scale: Double,
-                              mode: ClarityMode) -> LocalResult {
+                              mode: ClarityMode,
+                              workingLongEdge: Int = 0,
+                              hazeStrength: Double = 0) -> LocalResult {
         guard controls.clarity > 0, scale > 0,
               analysis.local.enabled else {
             return LocalResult(image: image, enabled: false, gains: [0, 0, 0])
         }
+        let longEdge = max(image.width, image.height)
+        let targetEdge = workingLongEdge > 0 ? min(longEdge, workingLongEdge) : longEdge
+        let working = targetEdge < longEdge
+            ? ClarityMath.downsampledToLongEdge(image, maxEdge: targetEdge)
+            : image
+        let field = localContrastField(
+            working, analysis: analysis, controls: controls,
+            scale: scale, mode: mode, hazeStrength: hazeStrength
+        )
+        let output = applyLocalLogField(
+            field.logOut, sourceWidth: field.width, sourceHeight: field.height, to: image
+        )
+        return LocalResult(image: output, enabled: true, gains: field.gains)
+    }
+
+    private struct LocalField {
+        var logOut: [Double]
+        var width: Int
+        var height: Int
+        var gains: [Double]
+    }
+
+    private static func localContrastField(_ image: ImageRGB, analysis: ClarityAnalysis,
+                                           controls: ClarityControls, scale: Double,
+                                           mode: ClarityMode, hazeStrength: Double) -> LocalField {
         let width = image.width
         let height = image.height
         let longEdge = max(width, height)
         let factor = Double(longEdge) / Double(max(analysis.width, 1))
         let sigmas = ClarityAnalyzer.localSigmas.map { $0 * factor }
         let gMaxBase = mode == .film ? [0.0, 0.06, 0.03] : [0.05, 0.12, 0.06]
-        let baseGains = gMaxBase.map { $0 * scale }
+        let budget = 1 - 0.70 * ClarityMath.clamp(hazeStrength / 0.30, 0, 1)
+        let baseGains = gMaxBase.map { $0 * scale * budget }
 
         let logY = logYPlane(image)
         let pyramid = ClarityMath.buildLaplacianPyramid(
             logY: logY, width: width, height: height, sigmas: sigmas
         )
-        let scoreMaps = ClarityMath.localContrastScores(pyramid, sigmas: sigmas)
-        let gradient = ClarityMath.gradientMagnitude(logY, width: width, height: height)
-        let edgeMaps: [[Double]] = sigmas.enumerated().map { index, sigma in
+
+        let analysisGradient = ClarityMath.gradientMagnitude(
+            analysis.logY, width: analysis.width, height: analysis.height
+        )
+        let edgeMaps: [[Double]] = ClarityAnalyzer.localSigmas.enumerated().map { index, sigma in
             let radius = max(1, Int(round(sigma * 0.5)))
             let dilated = ClarityMath.maxFilter(
-                gradient, width: width, height: height, radius: radius
+                analysisGradient, width: analysis.width, height: analysis.height, radius: radius
             )
             var map = [Double](repeating: 0, count: dilated.count)
             for i in 0..<map.count {
@@ -233,7 +270,7 @@ enum ClarityProcessors {
             }
             let band = pyramid.bands[min(index, pyramid.bands.count - 1)]
             return ClarityMath.resizePlane(
-                map, width: width, height: height,
+                map, width: analysis.width, height: analysis.height,
                 newWidth: band.width, newHeight: band.height
             )
         }
@@ -241,15 +278,18 @@ enum ClarityProcessors {
         var gains = [Double](repeating: 0, count: pyramid.bands.count)
         var bands = pyramid.bands
         for index in 0..<bands.count {
-            let score = scoreMaps[min(index, scoreMaps.count - 1)]
+            let band = bands[index]
+            let scoreSource = analysis.localScoreMaps[min(index, analysis.localScoreMaps.count - 1)]
+            let score = ClarityMath.resizePlane(
+                scoreSource.data, width: scoreSource.width, height: scoreSource.height,
+                newWidth: band.width, newHeight: band.height
+            )
             let edge = edgeMaps[min(index, edgeMaps.count - 1)]
-            var gain = baseGains[min(index, baseGains.count - 1)]
-            if score.data.count != bands[index].data.count { gain = 0 }
+            let gain = baseGains[min(index, baseGains.count - 1)]
             gains[index] = gain
-            guard gain > 1e-6 else { continue }
-            for i in 0..<bands[index].data.count {
-                let pixelGain = gain * score.data[i] * edge[i]
-                bands[index].data[i] *= (1 + pixelGain)
+            guard gain > 1e-6, edge.count == band.data.count, score.count == band.data.count else { continue }
+            for i in 0..<band.data.count {
+                bands[index].data[i] *= (1 + gain * score[i] * edge[i])
             }
         }
 
@@ -271,21 +311,28 @@ enum ClarityProcessors {
             )
         }
 
-        let reconstructed = reconstruct(bands)
+        var finalLog = reconstruct(bands)
         let inputGradient = ClarityMath.gradientMagnitude(logY, width: width, height: height)
-        let outputGradient = ClarityMath.gradientMagnitude(reconstructed, width: width, height: height)
+        let outputGradient = ClarityMath.gradientMagnitude(finalLog, width: width, height: height)
         let haloRatio = ClarityMath.percentile(outputGradient, 99)
             / max(ClarityMath.percentile(inputGradient, 99), 1e-9)
-
-        var finalBands = bands
-        if haloRatio > 1.15, finalBands.count > 0 {
-            let index = finalBands.count - 1
-            for i in 0..<finalBands[index].data.count {
-                finalBands[index].data[i] = pyramid.bands[index].data[i]
-            }
+        if haloRatio > 1.15, bands.count > 0 {
+            let index = bands.count - 1
+            bands[index] = pyramid.bands[index]
             gains[index] = 0
+            finalLog = reconstruct(bands)
         }
-        let finalLog = reconstruct(finalBands)
+        return LocalField(logOut: finalLog, width: width, height: height, gains: gains)
+    }
+
+    private static func applyLocalLogField(_ logOut: [Double], sourceWidth: Int,
+                                           sourceHeight: Int, to image: ImageRGB) -> ImageRGB {
+        let width = image.width
+        let height = image.height
+        let field = ClarityMath.resizePlane(
+            logOut, width: sourceWidth, height: sourceHeight,
+            newWidth: width, newHeight: height
+        )
         var output = image
         for i in 0..<(width * height) {
             let r = image.data[i * 3]
@@ -293,7 +340,7 @@ enum ClarityProcessors {
             let b = image.data[i * 3 + 2]
             let y = ClarityMath.luminance(r, g, b)
             guard y > 0.0005 else { continue }
-            let targetY = ClarityMath.expLog(finalLog[i])
+            let targetY = ClarityMath.expLog(field[i])
             var factor = targetY / y
             factor = ClarityMath.clamp(factor, 0.25, 4.0)
             let maxChannel = max(r, g, b)
@@ -304,7 +351,7 @@ enum ClarityProcessors {
             output.data[i * 3 + 1] = g * factor
             output.data[i * 3 + 2] = b * factor
         }
-        return LocalResult(image: output, enabled: true, gains: gains)
+        return output
     }
 
     // MARK: - 色净
@@ -390,11 +437,17 @@ enum ClarityProcessors {
     static func logYPlane(_ image: ImageRGB) -> [Double] {
         let count = image.width * image.height
         var output = [Double](repeating: 0, count: count)
-        for i in 0..<count {
-            let y = ClarityMath.luminance(
-                image.data[i * 3], image.data[i * 3 + 1], image.data[i * 3 + 2]
-            )
-            output[i] = ClarityMath.logY(y)
+        output.withUnsafeMutableBufferPointer { buffer in
+            guard let base = buffer.baseAddress else { return }
+            ClarityMath.parallelFor(rows: image.height) { row in
+                for x in 0..<image.width {
+                    let i = row * image.width + x
+                    let y = ClarityMath.luminance(
+                        image.data[i * 3], image.data[i * 3 + 1], image.data[i * 3 + 2]
+                    )
+                    base[i] = ClarityMath.logY(y)
+                }
+            }
         }
         return output
     }

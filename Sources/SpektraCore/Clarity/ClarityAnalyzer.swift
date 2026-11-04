@@ -2,6 +2,7 @@ import Foundation
 
 enum ClarityAnalyzer {
     static let analysisLongEdge = 1024
+    static let colorAnalysisLongEdge = 512
     static let localSigmas: [Double] = [2.0, 6.0, 14.0]
 
     static func analyze(_ image: ImageRGB, mode: ClarityMode) throws -> ClarityAnalysis {
@@ -60,14 +61,17 @@ enum ClarityAnalyzer {
         let medianLocalStdY = ClarityMath.median(localStdY)
 
         let haze = analyzeHaze(
-            linear: linear, y: y, logY: logY, chroma: chroma,
+            linear: linear, chroma: chroma,
             medianLocalStdY: medianLocalStdY, width: width, height: height
         )
 
+        let localBase = ClarityMath.downsamplePlaneBy2(logY, width: width, height: height)
+        let localSigmasHalf = localSigmas.map { $0 * 0.5 }
         let pyramid = ClarityMath.buildLaplacianPyramid(
-            logY: logY, width: width, height: height, sigmas: localSigmas
+            logY: localBase.data, width: localBase.width, height: localBase.height,
+            sigmas: localSigmasHalf
         )
-        let scoreMaps = ClarityMath.localContrastScores(pyramid, sigmas: localSigmas)
+        let scoreMaps = ClarityMath.localContrastScores(pyramid, sigmas: localSigmasHalf)
         let scaleScores = scoreMaps.map { ClarityMath.median($0.data) }
         let mediumScore = scaleScores.count > 1 ? scaleScores[1] : (scaleScores.first ?? 0)
         let local = ClarityLocalAnalysis(
@@ -112,6 +116,7 @@ enum ClarityAnalyzer {
             oklabA: oklab.a,
             oklabB: oklab.b,
             features: features,
+            localScoreMaps: scoreMaps,
             tone: tone,
             haze: haze.analysis,
             local: local,
@@ -196,24 +201,32 @@ enum ClarityAnalyzer {
         var airlight: Vec3
     }
 
-    private static func analyzeHaze(linear: ImageRGB, y: [Double], logY: [Double],
-                                    chroma: [Double], medianLocalStdY: Double,
+    private static func analyzeHaze(linear: ImageRGB, chroma: [Double],
+                                    medianLocalStdY: Double,
                                     width: Int, height: Int) -> HazeResult {
-        let count = width * height
+        let small = ClarityMath.downsampledToLongEdge(linear, maxEdge: 512)
+        let sw = small.width
+        let sh = small.height
+        let count = sw * sh
+        let smallY = ClarityMath.luminancePlane(small)
+        let smallChroma = ClarityMath.resizePlane(
+            chroma, width: width, height: height, newWidth: sw, newHeight: sh
+        )
+
         var dark = [Double](repeating: 0, count: count)
         for i in 0..<count {
             dark[i] = min(
-                linear.data[i * 3],
-                linear.data[i * 3 + 1],
-                linear.data[i * 3 + 2]
+                small.data[i * 3],
+                small.data[i * 3 + 1],
+                small.data[i * 3 + 2]
             )
         }
+        let darkRadius = max(2, Int(round(7.0 * Double(sw) / Double(width))))
         let darkFiltered = ClarityMath.minFilter(
-            dark, width: width, height: height, radius: 7
+            dark, width: sw, height: sh, radius: darkRadius
         )
-        let sortedDark = darkFiltered.sorted()
         let candidateCount = max(1, Int(Double(count) * 0.001))
-        let threshold = sortedDark[max(0, sortedDark.count - candidateCount)]
+        let threshold = darkChannelThreshold(darkFiltered, targetCount: candidateCount)
 
         var candidateR: [Double] = []
         var candidateG: [Double] = []
@@ -223,9 +236,9 @@ enum ClarityAnalyzer {
         candidateB.reserveCapacity(candidateCount * 2)
         for i in 0..<count {
             guard darkFiltered[i] >= threshold else { continue }
-            let r = linear.data[i * 3]
-            let g = linear.data[i * 3 + 1]
-            let b = linear.data[i * 3 + 2]
+            let r = small.data[i * 3]
+            let g = small.data[i * 3 + 1]
+            let b = small.data[i * 3 + 2]
             if r > 0.98 || g > 0.98 || b > 0.98 { continue }
             let lab = ClarityMath.oklab(fromLinear: Vec3(r, g, b))
             if lab.x > 0.90 { continue }
@@ -247,14 +260,15 @@ enum ClarityAnalyzer {
 
         var transmission = [Double](repeating: 1, count: count)
         for i in 0..<count {
-            let r = linear.data[i * 3] / max(airlight.x, 1e-6)
-            let g = linear.data[i * 3 + 1] / max(airlight.y, 1e-6)
-            let b = linear.data[i * 3 + 2] / max(airlight.z, 1e-6)
+            let r = small.data[i * 3] / max(airlight.x, 1e-6)
+            let g = small.data[i * 3 + 1] / max(airlight.y, 1e-6)
+            let b = small.data[i * 3 + 2] / max(airlight.z, 1e-6)
             transmission[i] = ClarityMath.clamp(1 - 0.90 * min(r, g, b), 0.35, 1)
         }
+        let guideRadius = max(3, Int(round(20.0 * Double(sw) / Double(width))))
         transmission = ClarityMath.guidedFilter(
-            guide: y, source: transmission,
-            width: width, height: height, radius: 20, epsilon: 0.001
+            guide: smallY, source: transmission,
+            width: sw, height: sh, radius: guideRadius, epsilon: 0.001
         )
 
         var coverageCount = 0
@@ -262,7 +276,7 @@ enum ClarityAnalyzer {
         let coverage = Double(coverageCount) / Double(max(count, 1))
 
         let medianDark = ClarityMath.median(darkFiltered)
-        let medianChroma = ClarityMath.median(chroma)
+        let medianChroma = ClarityMath.median(smallChroma)
         let sDark = ClarityMath.smoothstep(0.10, 0.35, medianDark)
         let sContrast = 1 - ClarityMath.smoothstep(0.04, 0.12, medianLocalStdY)
         let sColor = 1 - ClarityMath.smoothstep(0.025, 0.08, medianChroma)
@@ -285,23 +299,45 @@ enum ClarityAnalyzer {
             validCandidateFraction: validCandidateFraction,
             enabled: enabled
         )
-        return HazeResult(analysis: analysis, transmission: transmission, airlight: airlight)
+        let fullTransmission = ClarityMath.resizePlane(
+            transmission, width: sw, height: sh, newWidth: width, newHeight: height
+        )
+        return HazeResult(analysis: analysis, transmission: fullTransmission, airlight: airlight)
     }
 
     // MARK: - 偏色
 
+    private static func darkChannelThreshold(_ values: [Double], targetCount: Int) -> Double {
+        guard !values.isEmpty else { return 0 }
+        var histogram = [Int](repeating: 0, count: 1024)
+        for value in values {
+            let index = min(max(Int(value * 1023), 0), 1023)
+            histogram[index] += 1
+        }
+        var cumulative = 0
+        for index in stride(from: 1023, through: 0, by: -1) {
+            cumulative += histogram[index]
+            if cumulative >= targetCount { return Double(index) / 1023 }
+        }
+        return 0
+    }
+
     static func analyzeColor(linearImage: ImageRGB) -> ClarityColorAnalysis {
         let small = ClarityMath.downsampledToLongEdge(
-            linearImage, maxEdge: analysisLongEdge
+            linearImage, maxEdge: colorAnalysisLongEdge
         )
-        let width = small.width
-        let height = small.height
-        let count = width * height
+        let count = small.width * small.height
         let oklab = ClarityMath.oklabPlanes(small)
         var chroma = [Double](repeating: 0, count: count)
         for i in 0..<count {
             chroma[i] = sqrt(oklab.a[i] * oklab.a[i] + oklab.b[i] * oklab.b[i])
         }
+        return analyzeColor(oklab: oklab, chroma: chroma, width: small.width, height: small.height)
+    }
+
+    static func analyzeColor(oklab: (l: [Double], a: [Double], b: [Double]),
+                             chroma: [Double], width: Int, height: Int) -> ClarityColorAnalysis {
+        let count = width * height
 
         let meanL = ClarityMath.boxBlur(oklab.l, width: width, height: height, radius: 4)
         var lSquared = [Double](repeating: 0, count: count)

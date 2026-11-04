@@ -104,6 +104,7 @@ struct ClarityAnalysis {
     let oklabA: [Double]
     let oklabB: [Double]
     let features: ClarityFeatureSet
+    let localScoreMaps: [ClarityMath.Plane]
     let tone: ClarityToneAnalysis
     let haze: ClarityHazeAnalysis
     let local: ClarityLocalAnalysis
