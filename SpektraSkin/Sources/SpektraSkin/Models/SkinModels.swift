@@ -173,10 +173,97 @@ struct ParamPage: Identifiable, Hashable {
 
 // MARK: - 显影
 
+/// 渲染调度状态：对齐 electron 的「等待新参数 / 已中断 / 渲染中(进度)」。
+struct RenderPhase: Hashable {
+    enum State: Hashable {
+        case idle
+        case waiting
+        case interrupted
+        case rendering
+    }
+
+    var state: State = .idle
+    var label: String = ""
+    var index: Int = 0
+    var total: Int = 0
+
+    var isBusy: Bool {
+        state != .idle
+    }
+
+    static let idle = RenderPhase()
+}
+
 struct HistogramData: Hashable {
     let red: [Double]
     let green: [Double]
     let blue: [Double]
+}
+
+// MARK: - 导出
+
+enum ExportFormat: String, CaseIterable, Identifiable, Hashable {
+    case tiff8
+    case tiff16
+    case tiff16ProPhoto
+    case exrHalf
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .tiff8: return "TIFF 8-bit（sRGB）"
+        case .tiff16: return "TIFF 16-bit（sRGB）"
+        case .tiff16ProPhoto: return "TIFF 16-bit（ProPhoto 线性）"
+        case .exrHalf: return "EXR half（ACES 线性）"
+        }
+    }
+
+    var shortTitle: String {
+        switch self {
+        case .tiff8: return "TIFF 8"
+        case .tiff16: return "TIFF 16"
+        case .tiff16ProPhoto: return "ProPhoto 16"
+        case .exrHalf: return "EXR half"
+        }
+    }
+
+    var fileExtension: String {
+        switch self {
+        case .tiff8, .tiff16, .tiff16ProPhoto: return "tif"
+        case .exrHalf: return "exr"
+        }
+    }
+
+    var bitDepth: Int {
+        switch self {
+        case .tiff8: return 8
+        case .tiff16, .tiff16ProPhoto: return 16
+        case .exrHalf: return 16
+        }
+    }
+
+    var colorSpace: String? {
+        switch self {
+        case .tiff16ProPhoto: return "ProPhoto RGB"
+        case .exrHalf: return "ACES2065-1"
+        default: return nil
+        }
+    }
+
+    var cctfEncoding: Bool? {
+        switch self {
+        case .tiff16ProPhoto, .exrHalf: return false
+        default: return nil
+        }
+    }
+}
+
+struct ExportSettings: Equatable {
+    var format: ExportFormat = .tiff16
+    var longEdge: Int = 0
+    var directory: URL?
+    var filenameTemplate: String = "{name}-spektra"
 }
 
 struct EditorSnapshot {
@@ -194,12 +281,22 @@ struct EditorSnapshot {
     var previewImage: NSImage? = nil
     var originalImage: NSImage? = nil
     var previewScale: Double = 0.25
+    var renderPhase: RenderPhase = .idle
 }
 
 struct GradeSnapshot {
     let photo: PhotoItem
     let handoffMeta: String
     var previewImage: NSImage? = nil
+    var sourceReady: Bool = false
+    var sourceSize: String = ""
+    var analysis: ToneAnalysis? = nil
+    var presets: [GradePreset] = []
+    var luts: [GradeLUTEntry] = []
+    var recipe = GradeRecipe()
+    var phase: RenderPhase = .idle
+    var histogram: HistogramData = PreviewData.histogram
+    var statusMessage: String = ""
 }
 
 // MARK: - 后端边界
@@ -234,6 +331,12 @@ struct SkinActions {
     var importPhotos: () -> Void = {}
     var importFolder: () -> Void = {}
     var exportAs: (String) -> Void = { _ in }
+    var exportWithSettings: (ExportSettings) -> Void = { _ in }
+    var gradeRecipeChanged: (GradeRecipe) -> Void = { _ in }
+    var gradePresetSaved: (String, GradeRecipe) -> Void = { _, _ in }
+    var gradePresetDeleted: (String) -> Void = { _ in }
+    var gradeLUTImported: () -> Void = {}
+    var gradeExport: (ExportSettings) -> Void = { _ in }
     var renderScaleChanged: (Double) -> Void = { _ in }
     var reRender: () -> Void = {}
     var toggleFavorite: (String) -> Void = { _ in }

@@ -11,6 +11,7 @@ final class EngineHost: ObservableObject {
     @Published private(set) var revision = 0
     @Published private(set) var previewImage: NSImage?
     @Published private(set) var isRendering = false
+    @Published private(set) var renderPhase = RenderPhase.idle
     @Published private(set) var statusMessage = "照片库已就绪"
 
     let store: LibraryStore
@@ -30,6 +31,40 @@ final class EngineHost: ObservableObject {
     private var originalImage: NSImage?
     private(set) var previewScale: Double = 0.25
     private let thumbnailQueue = DispatchQueue(label: "spektra.thumbnail", qos: .utility)
+
+    /// 渲染调度：参数停止变化 1s 后再提交，期间的新参数立即中断在途渲染。
+    private var pendingRenderWork: DispatchWorkItem?
+    private var previewRenderInFlight = false
+    private var renderToken = 0
+    private let previewDebounce: TimeInterval = 1.0
+
+    // MARK: - 调色台
+
+    @Published private(set) var gradePreviewImage: NSImage?
+    @Published private(set) var gradePhase = RenderPhase.idle
+    @Published private(set) var gradeAnalysis: ToneAnalysis?
+    @Published private(set) var gradeSourceReady = false
+    @Published private(set) var gradeSourceSize = ""
+    @Published private(set) var gradeRecipe = GradeRecipe()
+    @Published private(set) var gradePresets: [GradePreset] = GradePresetStore.shared.all
+    @Published private(set) var gradeLUTs: [GradeLUTEntry] = GradePresetStore.shared.luts()
+    @Published private(set) var gradeHistogram: HistogramData?
+
+    private var gradeSource: ImageRGB?
+    private var gradeProxyCache: [Int: ImageRGB] = [:]
+    private let gradeRenderer = PreviewRenderer()
+    private let gradeQueue = DispatchQueue(label: "spektra.grade", qos: .userInitiated)
+    private let gradeLock = NSLock()
+    private var gradePreviewToken = 0
+    private var gradeExportToken = 0
+    private var gradeSourceToken = 0
+    private var gradePreviewInFlight = false
+    private var gradeExportInFlight = false
+    private var gradePendingProxy: DispatchWorkItem?
+    private var gradePendingSettle: DispatchWorkItem?
+    private var gradeIsActive = false
+    private let gradeProxyEdge = 800
+    private let gradeFullEdge = 1600
 
     init(store: LibraryStore = LibraryStore()) {
         self.store = store
@@ -151,7 +186,7 @@ final class EngineHost: ObservableObject {
         photo.edit.quickIntents = quickIntents
         applyQuickMapping(id: id, q: q, edit: &photo.edit)
         persist(photo)
-        renderPreview()
+        schedulePreviewRender()
     }
 
     func applyPad(_ x: Double, _ y: Double) {
@@ -160,7 +195,7 @@ final class EngineHost: ObservableObject {
         photo.edit.enlarger.yFilterShift = min(max(baseline.enlarger.yFilterShift + 40 * x / 100, -60), 60)
         photo.edit.enlarger.mFilterShift = min(max(baseline.enlarger.mFilterShift + 40 * y / 100, -60), 60)
         persist(photo)
-        renderPreview()
+        schedulePreviewRender()
     }
 
     private func persist(_ photo: LibraryPhoto) {
@@ -174,24 +209,92 @@ final class EngineHost: ObservableObject {
         bump()
     }
 
+    /// 参数变化后的调度：停止输入 1s 再渲染；在途渲染立即中断。
+    func schedulePreviewRender() {
+        guard loadedImage != nil else { return }
+        pendingRenderWork?.cancel()
+        pendingRenderWork = nil
+        if previewRenderInFlight {
+            renderToken += 1
+            renderer.invalidate()
+            previewRenderInFlight = false
+            isRendering = false
+            renderPhase = RenderPhase(
+                state: .interrupted, label: "已中断，等待新参数…", index: 0, total: 1
+            )
+        } else {
+            renderPhase = RenderPhase(
+                state: .waiting, label: "等待新参数…", index: 0, total: 1
+            )
+        }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.pendingRenderWork = nil
+            self.renderPreviewNow()
+        }
+        pendingRenderWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + previewDebounce, execute: work)
+        bump()
+    }
+
+    /// 立即渲染（换片、改渲染比例、点“渲染”时使用）。
     func renderPreview() {
+        pendingRenderWork?.cancel()
+        pendingRenderWork = nil
+        renderPreviewNow()
+    }
+
+    private func renderPreviewNow() {
         guard let photo = currentPhoto(), let image = loadedImage,
               var params = try? photo.makeParams() else { return }
         params.io.inputColorSpace = loadedColorSpace
         params.io.inputCCTFDecoding = loadedCCTF
+        renderToken += 1
+        let token = renderToken
+        previewRenderInFlight = true
         isRendering = true
+        renderPhase = RenderPhase(state: .rendering, label: "显影中…", index: 0, total: 1)
         bump()
         let longEdge = max(image.width, image.height)
         let maxSize = max(160, Int(Double(longEdge) * previewScale))
-        renderer.render(params: params, image: image, maxSize: maxSize) { outcome in
+        renderer.render(
+            params: params,
+            image: image,
+            maxSize: maxSize,
+            progress: { label, index, total in
+                Task { @MainActor [weak self] in
+                    guard let self, self.renderToken == token else { return }
+                    self.renderPhase = RenderPhase(
+                        state: .rendering, label: Self.stageLabel(label),
+                        index: index, total: total
+                    )
+                }
+            }
+        ) { outcome in
             let histogram = Self.histogram(from: outcome.image)
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
+                guard let self, self.renderToken == token else { return }
                 self.previewImage = PreviewRenderer.nsImage(from: outcome.image)
                 self.previewHistogram = histogram
                 self.isRendering = false
+                self.previewRenderInFlight = false
+                self.renderPhase = .idle
                 self.statusMessage = String(format: "预览 %.2f s", outcome.elapsed)
                 self.bump()
             }
+        }
+    }
+
+    private static func stageLabel(_ label: String) -> String {
+        switch label {
+        case "preprocess": return "预处理"
+        case "filming.expose": return "胶片曝光"
+        case "filming.develop": return "胶片显影"
+        case "printing.expose": return "印相曝光"
+        case "printing.develop": return "印相显影"
+        case "scanning.scan_print": return "扫描打印"
+        case "scanning.scan_film": return "正片扫描"
+        default: return label
         }
     }
 
@@ -205,14 +308,14 @@ final class EngineHost: ObservableObject {
         }
         photo.edit = edit
         persist(photo)
-        renderPreview()
+        schedulePreviewRender()
     }
 
     func setPaper(_ id: String) {
         guard var photo = currentPhoto(), id != photo.edit.printStock else { return }
         photo.edit.printStock = id
         persist(photo)
-        renderPreview()
+        schedulePreviewRender()
     }
 
     func resetParameters() {
@@ -222,7 +325,7 @@ final class EngineHost: ObservableObject {
         quickIntents = [:]
         padIntent = .zero
         persist(photo)
-        renderPreview()
+        schedulePreviewRender()
     }
 
     @discardableResult
@@ -318,32 +421,57 @@ final class EngineHost: ObservableObject {
             statusMessage = "没有可导出的照片"
             return
         }
-        let ext: String
-        let bitDepth: Int
-        var colorSpace: String?
-        var cctfEncoding: Bool?
+        let exportFormat: ExportFormat
         switch format {
-        case "tiff8":
-            ext = "tif"; bitDepth = 8
-        case "tiff16-prophoto":
-            ext = "tif"; bitDepth = 16
-            colorSpace = "ProPhoto RGB"; cctfEncoding = false
-        case "exr16":
-            ext = "exr"; bitDepth = 16
-            colorSpace = "ACES2065-1"; cctfEncoding = false
-        default:
-            ext = "tif"; bitDepth = 16
+        case "tiff8": exportFormat = .tiff8
+        case "tiff16-prophoto": exportFormat = .tiff16ProPhoto
+        case "exr16": exportFormat = .exrHalf
+        default: exportFormat = .tiff16
         }
+        let base = (photo.filename as NSString).deletingPathExtension
+        let settings = ExportSettings(filenameTemplate: "\(base)-spektra")
+        var resolved = settings
+        resolved.format = exportFormat
+        presentSavePanel(photo: photo, settings: resolved)
+    }
+
+    /// 导出设置面板：目录已指定时直接写盘，否则退回保存面板。
+    func export(_ settings: ExportSettings) {
+        guard let photo = currentPhoto() else {
+            statusMessage = "没有可导出的照片"
+            return
+        }
+        if let directory = settings.directory {
+            let stem = Self.expandedStem(
+                settings.filenameTemplate,
+                name: (photo.filename as NSString).deletingPathExtension,
+                film: filmDisplayName(photo.edit.filmStock),
+                paper: paperDisplayName(photo.edit.printStock)
+            )
+            let target = Self.uniqueDestination(
+                directory: directory, stem: stem, ext: settings.format.fileExtension
+            )
+            enqueueExport(photo: photo, destination: target, settings: settings)
+        } else {
+            presentSavePanel(photo: photo, settings: settings)
+        }
+    }
+
+    private func presentSavePanel(photo: LibraryPhoto, settings: ExportSettings) {
+        let ext = settings.format.fileExtension
         let panel = NSSavePanel()
         panel.canCreateDirectories = true
         panel.allowedContentTypes = [UTType(filenameExtension: ext) ?? .data]
-        let base = (photo.filename as NSString).deletingPathExtension
-        panel.nameFieldStringValue = "\(base)-spektra.\(ext)"
+        let stem = Self.expandedStem(
+            settings.filenameTemplate,
+            name: (photo.filename as NSString).deletingPathExtension,
+            film: filmDisplayName(photo.edit.filmStock),
+            paper: paperDisplayName(photo.edit.printStock)
+        )
+        panel.nameFieldStringValue = "\(stem).\(ext)"
         let completion: (NSApplication.ModalResponse) -> Void = { [weak self] response in
             guard response == .OK, let destination = panel.url else { return }
-            self?.enqueueExport(photo: photo, destination: destination,
-                                bitDepth: bitDepth, colorSpace: colorSpace,
-                                cctfEncoding: cctfEncoding)
+            self?.enqueueExport(photo: photo, destination: destination, settings: settings)
         }
         if let window = NSApp.keyWindow {
             panel.beginSheetModal(for: window, completionHandler: completion)
@@ -352,15 +480,44 @@ final class EngineHost: ObservableObject {
         }
     }
 
-    private func enqueueExport(photo: LibraryPhoto, destination: URL, bitDepth: Int,
-                               colorSpace: String? = nil, cctfEncoding: Bool? = nil) {
+    private func enqueueExport(photo: LibraryPhoto, destination: URL, settings: ExportSettings) {
         exportQueue.enqueue(
-            ExportRequest(photoID: photo.id, destination: destination,
-                          bitDepth: bitDepth, colorSpace: colorSpace,
-                          cctfEncoding: cctfEncoding),
+            ExportRequest(
+                photoID: photo.id, destination: destination,
+                bitDepth: settings.format.bitDepth,
+                colorSpace: settings.format.colorSpace,
+                cctfEncoding: settings.format.cctfEncoding,
+                longEdge: settings.longEdge
+            ),
             photo: photo
         )
         statusMessage = "开始导出 \(destination.lastPathComponent)"
+    }
+
+    private static func expandedStem(
+        _ template: String, name: String, film: String, paper: String
+    ) -> String {
+        var text = template.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.isEmpty { text = "{name}-spektra" }
+        text = text
+            .replacingOccurrences(of: "{name}", with: name)
+            .replacingOccurrences(of: "{film}", with: film)
+            .replacingOccurrences(of: "{paper}", with: paper)
+        text = text.components(separatedBy: CharacterSet(charactersIn: "/:\\?%*|\"<>"))
+            .joined(separator: "-")
+        if text.isEmpty { text = "\(name)-spektra" }
+        return text
+    }
+
+    private static func uniqueDestination(directory: URL, stem: String, ext: String) -> URL {
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        var target = directory.appendingPathComponent("\(stem).\(ext)")
+        var index = 1
+        while FileManager.default.fileExists(atPath: target.path), index < 1000 {
+            target = directory.appendingPathComponent("\(stem)-\(index).\(ext)")
+            index += 1
+        }
+        return target
     }
 
     func exportCurrent(to destination: URL? = nil) {
@@ -538,7 +695,7 @@ final class EngineHost: ObservableObject {
         }
         photo.edit = edit
         persist(photo)
-        renderPreview()
+        schedulePreviewRender()
     }
 
     func applyProToggle(_ id: String, _ value: Bool) {
@@ -562,7 +719,408 @@ final class EngineHost: ObservableObject {
         }
         photo.edit = edit
         persist(photo)
-        renderPreview()
+        schedulePreviewRender()
+    }
+
+    // MARK: - 调色台流程
+
+    func beginGrade() {
+        guard let photo = currentPhoto() else {
+            statusMessage = "没有可调色的照片"
+            return
+        }
+        pendingRenderWork?.cancel()
+        pendingRenderWork = nil
+        renderToken += 1
+        renderer.invalidate()
+        previewRenderInFlight = false
+        isRendering = false
+        renderPhase = .idle
+
+        gradeIsActive = true
+        gradeRecipe = GradeRecipe()
+        gradePresets = GradePresetStore.shared.all
+        gradeLUTs = GradePresetStore.shared.luts()
+        gradePreviewImage = nil
+        gradeAnalysis = nil
+        gradeHistogram = nil
+        gradeSourceReady = false
+        gradeProxyCache = [:]
+        gradeExportInFlight = false
+        _ = bumpGradePreviewToken()
+        _ = bumpGradeExportToken()
+        prepareGradeSource(for: photo)
+    }
+
+    func endGrade() {
+        gradeIsActive = false
+        gradePendingProxy?.cancel()
+        gradePendingProxy = nil
+        gradePendingSettle?.cancel()
+        gradePendingSettle = nil
+        _ = bumpGradePreviewToken()
+        _ = bumpGradeExportToken()
+        gradePreviewInFlight = false
+        gradeExportInFlight = false
+        gradePhase = .idle
+    }
+
+    private func prepareGradeSource(for photo: LibraryPhoto) {
+        gradeSourceToken += 1
+        let token = gradeSourceToken
+        gradeSourceReady = false
+        gradePhase = RenderPhase(
+            state: .rendering, label: "生成交接图…", index: 0, total: 1
+        )
+        bump()
+
+        guard let image = loadedImage, var params = try? photo.makeParams() else {
+            gradePhase = .idle
+            statusMessage = "无法读取交接图"
+            return
+        }
+        params.io.inputColorSpace = loadedColorSpace
+        params.io.inputCCTFDecoding = loadedCCTF
+        params.io.outputColorSpace = "ProPhoto RGB"
+        params.io.outputCCTFEncoding = false
+
+        gradeRenderer.render(
+            params: params,
+            image: image,
+            maxSize: gradeFullEdge,
+            progress: { [weak self] label, index, total in
+                Task { @MainActor [weak self] in
+                    guard let self, self.gradeSourceToken == token else { return }
+                    self.gradePhase = RenderPhase(
+                        state: .rendering,
+                        label: "交接图 · \(Self.stageLabel(label))",
+                        index: index, total: total
+                    )
+                }
+            }
+        ) { [weak self] outcome in
+            guard let self else { return }
+            self.gradeQueue.async {
+                let linear = GradeEngine.prepareSource(outcome.image)
+                Task { @MainActor [weak self] in
+                    guard let self, self.gradeSourceToken == token else { return }
+                    self.gradeSource = linear
+                    self.gradeSourceReady = true
+                    self.gradeSourceSize = "\(linear.width)×\(linear.height)"
+                    self.gradeProxyCache = [:]
+                    self.scheduleGradePreview(immediate: true)
+                }
+            }
+        }
+    }
+
+    @discardableResult
+    private func bumpGradePreviewToken() -> Int {
+        gradeLock.lock()
+        gradePreviewToken += 1
+        let token = gradePreviewToken
+        gradeLock.unlock()
+        return token
+    }
+
+    private func isCurrentGradeToken(_ token: Int) -> Bool {
+        gradeLock.lock()
+        defer { gradeLock.unlock() }
+        return token == gradePreviewToken
+    }
+
+    @discardableResult
+    private func bumpGradeExportToken() -> Int {
+        gradeLock.lock()
+        gradeExportToken += 1
+        let token = gradeExportToken
+        gradeLock.unlock()
+        return token
+    }
+
+    private func isCurrentGradeExportToken(_ token: Int) -> Bool {
+        gradeLock.lock()
+        defer { gradeLock.unlock() }
+        return token == gradeExportToken
+    }
+
+    /// 调色预览调度：交互期 120ms 节流代理图，停止输入 1.1s 后精修。
+    private func scheduleGradePreview(immediate: Bool = false) {
+        guard gradeIsActive, gradeSourceReady, !gradeExportInFlight else { return }
+        gradePendingProxy?.cancel()
+        gradePendingProxy = nil
+        gradePendingSettle?.cancel()
+        gradePendingSettle = nil
+
+        if immediate {
+            _ = bumpGradePreviewToken()
+            renderGradePreview(edge: gradeFullEdge)
+            return
+        }
+
+        if gradePreviewInFlight {
+            _ = bumpGradePreviewToken()
+            gradePreviewInFlight = false
+            gradePhase = RenderPhase(
+                state: .interrupted, label: "已中断，等待新参数…", index: 0, total: 1
+            )
+        } else {
+            gradePhase = RenderPhase(
+                state: .waiting, label: "等待调色参数…", index: 0, total: 1
+            )
+        }
+
+        let proxy = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.gradePendingProxy = nil
+            self.renderGradePreview(edge: self.gradeProxyEdge)
+        }
+        gradePendingProxy = proxy
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: proxy)
+
+        let settle = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.gradePendingSettle = nil
+            self.gradePendingProxy?.cancel()
+            self.gradePendingProxy = nil
+            self.renderGradePreview(edge: self.gradeFullEdge)
+        }
+        gradePendingSettle = settle
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.1, execute: settle)
+        bump()
+    }
+
+    private func renderGradePreview(edge: Int) {
+        guard let source = gradeSource, gradeIsActive, !gradeExportInFlight else { return }
+        let recipe = gradeRecipe
+        let token = bumpGradePreviewToken()
+        gradePreviewInFlight = true
+        gradePhase = RenderPhase(
+            state: .rendering,
+            label: edge <= gradeProxyEdge ? "调色代理…" : "调色精修…",
+            index: 0, total: 1
+        )
+        bump()
+
+        let proxy: ImageRGB
+        if let cached = gradeProxyCache[edge] {
+            proxy = cached
+        } else {
+            proxy = GradeEngine.downsampleLinear(source, maxLongEdge: edge)
+            gradeProxyCache[edge] = proxy
+        }
+
+        gradeQueue.async { [weak self] in
+            guard let self else { return }
+            do {
+                let result = try GradeEngine.render(
+                    proxy, recipe: recipe,
+                    shouldCancel: { !self.isCurrentGradeToken(token) }
+                )
+                let histogram = Self.histogram(from: result.image)
+                let image = PreviewRenderer.nsImage(from: result.image)
+                Task { @MainActor [weak self] in
+                    guard let self, self.isCurrentGradeToken(token) else { return }
+                    self.gradePreviewImage = image
+                    self.gradeAnalysis = result.analysis
+                    self.gradeHistogram = histogram
+                    self.gradePreviewInFlight = false
+                    self.gradePhase = .idle
+                    self.bump()
+                }
+            } catch is GradeCancelled {
+                return
+            } catch {
+                Task { @MainActor [weak self] in
+                    guard let self, self.isCurrentGradeToken(token) else { return }
+                    self.gradePreviewInFlight = false
+                    self.gradePhase = .idle
+                    self.statusMessage = "调色失败：\(error)"
+                    self.bump()
+                }
+            }
+        }
+    }
+
+    func setGradeRecipe(_ recipe: GradeRecipe) {
+        guard gradeIsActive else { return }
+        gradeRecipe = recipe
+        scheduleGradePreview()
+    }
+
+    func saveGradePreset(name: String, recipe: GradeRecipe) {
+        _ = GradePresetStore.shared.save(name: name, recipe: recipe)
+        gradePresets = GradePresetStore.shared.all
+        statusMessage = "预设已保存"
+        bump()
+    }
+
+    func deleteGradePreset(id: String) {
+        if GradePresetStore.shared.delete(id: id) {
+            gradePresets = GradePresetStore.shared.all
+            statusMessage = "预设已删除"
+            bump()
+        }
+    }
+
+    func importGradeLUT(from url: URL) {
+        do {
+            let entry = try GradePresetStore.shared.importLUT(from: url)
+            gradeLUTs = GradePresetStore.shared.luts()
+            var recipe = gradeRecipe
+            recipe.lut.path = entry.path
+            setGradeRecipe(recipe)
+            statusMessage = "LUT 已导入"
+        } catch {
+            statusMessage = "LUT 导入失败：\(error.localizedDescription)"
+        }
+    }
+
+    func exportGrade(_ settings: ExportSettings) {
+        guard let photo = currentPhoto() else {
+            statusMessage = "没有可导出的照片"
+            return
+        }
+        if let directory = settings.directory {
+            let name = (photo.filename as NSString).deletingPathExtension
+            let stem = Self.expandedStem(
+                settings.filenameTemplate, name: name,
+                film: filmDisplayName(photo.edit.filmStock),
+                paper: paperDisplayName(photo.edit.printStock)
+            )
+            let target = Self.uniqueDestination(
+                directory: directory, stem: stem, ext: settings.format.fileExtension
+            )
+            runGradeExport(photo: photo, destination: target, settings: settings)
+        } else {
+            let ext = settings.format.fileExtension
+            let panel = NSSavePanel()
+            panel.canCreateDirectories = true
+            panel.allowedContentTypes = [UTType(filenameExtension: ext) ?? .data]
+            let name = (photo.filename as NSString).deletingPathExtension
+            let stem = Self.expandedStem(
+                settings.filenameTemplate, name: name,
+                film: filmDisplayName(photo.edit.filmStock),
+                paper: paperDisplayName(photo.edit.printStock)
+            )
+            panel.nameFieldStringValue = "\(stem).\(ext)"
+            let completion: (NSApplication.ModalResponse) -> Void = { [weak self] response in
+                guard response == .OK, let destination = panel.url else { return }
+                self?.runGradeExport(photo: photo, destination: destination, settings: settings)
+            }
+            if let window = NSApp.keyWindow {
+                panel.beginSheetModal(for: window, completionHandler: completion)
+            } else {
+                completion(panel.runModal())
+            }
+        }
+    }
+
+    private func runGradeExport(
+        photo: LibraryPhoto, destination: URL, settings: ExportSettings
+    ) {
+        gradePendingProxy?.cancel()
+        gradePendingProxy = nil
+        gradePendingSettle?.cancel()
+        gradePendingSettle = nil
+        _ = bumpGradePreviewToken()
+        gradeExportInFlight = true
+        let recipe = gradeRecipe
+        let token = bumpGradeExportToken()
+        gradePhase = RenderPhase(
+            state: .rendering, label: "导出调色…", index: 0, total: 1
+        )
+        bump()
+
+        gradeQueue.async { [weak self] in
+            guard let self else { return }
+            do {
+                let sourceURL = self.store.originalURL(for: photo)
+                let loaded = try ImageLoader.load(url: sourceURL)
+                var params = try photo.makeParams()
+                params.io.inputColorSpace = loaded.colorSpace
+                params.io.inputCCTFDecoding = loaded.cctfDecoding
+                params.io.outputColorSpace = "ProPhoto RGB"
+                params.io.outputCCTFEncoding = false
+
+                let pipeline = SimulationPipeline(params: params, keepTaps: false)
+                pipeline.shouldCancel = { !self.isCurrentGradeExportToken(token) }
+                let full = pipeline.process(loaded.image, progress: { label, index, total in
+                    Task { @MainActor [weak self] in
+                        guard let self, self.isCurrentGradeExportToken(token) else { return }
+                        self.gradePhase = RenderPhase(
+                            state: .rendering, label: "导出 · \(Self.stageLabel(label))",
+                            index: index, total: total
+                        )
+                    }
+                })
+                let linear = GradeEngine.prepareSource(full.rgbOut)
+                let graded = try GradeEngine.render(
+                    linear, recipe: recipe,
+                    shouldCancel: { !self.isCurrentGradeExportToken(token) }
+                )
+                var output = graded.image
+                if settings.longEdge > 0 {
+                    output = Resize.longEdge(output, maxSize: settings.longEdge)
+                }
+                let targetSpace = settings.format.colorSpace ?? "sRGB"
+                let targetCCTF = settings.format.cctfEncoding ?? true
+                output = Self.convertForExport(
+                    output, colorSpace: targetSpace, cctfEncoding: targetCCTF
+                )
+                try ImageExport.save(
+                    output, to: destination,
+                    bitDepth: settings.format.bitDepth,
+                    colorSpace: targetSpace, cctfEncoding: targetCCTF
+                )
+                Task { @MainActor [weak self] in
+                    guard let self, self.isCurrentGradeExportToken(token) else { return }
+                    self.gradeExportInFlight = false
+                    self.gradePhase = .idle
+                    self.statusMessage = "已导出到 \(destination.lastPathComponent)"
+                    self.bump()
+                }
+            } catch is GradeCancelled {
+                Task { @MainActor [weak self] in
+                    guard let self, self.isCurrentGradeExportToken(token) else { return }
+                    self.gradeExportInFlight = false
+                    self.gradePhase = .idle
+                    self.bump()
+                }
+            } catch {
+                Task { @MainActor [weak self] in
+                    guard let self, self.isCurrentGradeExportToken(token) else { return }
+                    self.gradeExportInFlight = false
+                    self.gradePhase = .idle
+                    self.statusMessage = "导出失败：\(error)"
+                    self.bump()
+                }
+            }
+        }
+    }
+
+    private static func convertForExport(
+        _ image: ImageRGB, colorSpace: String, cctfEncoding: Bool
+    ) -> ImageRGB {
+        if colorSpace == "sRGB" && cctfEncoding { return image }
+        let sourceKind = ColorMath.cctfKind(for: "sRGB")
+        let targetKind = ColorMath.cctfKind(for: colorSpace)
+        return image.map { pixel in
+            let decoded = Vec3(
+                ColorMath.cctfDecode(pixel.x, kind: sourceKind),
+                ColorMath.cctfDecode(pixel.y, kind: sourceKind),
+                ColorMath.cctfDecode(pixel.z, kind: sourceKind)
+            )
+            let converted = ColorMath.rgbToRGB(decoded, from: "sRGB", to: colorSpace)
+            if cctfEncoding {
+                return Vec3(
+                    ColorMath.cctfEncode(converted.x, kind: targetKind),
+                    ColorMath.cctfEncode(converted.y, kind: targetKind),
+                    ColorMath.cctfEncode(converted.z, kind: targetKind)
+                )
+            }
+            return converted
+        }
     }
 }
 
@@ -631,7 +1189,8 @@ extension EngineHost {
             stripCount: store.photos.count,
             previewImage: image,
             originalImage: photo.id == selectedID ? originalImage : nil,
-            previewScale: previewScale
+            previewScale: previewScale,
+            renderPhase: photo.id == selectedID ? renderPhase : .idle
         )
     }
 
@@ -659,10 +1218,28 @@ extension EngineHost {
             ), handoffMeta: "")
         }
         let item = photoItem(photo)
+        let active = photo.id == selectedID && gradeIsActive
+        let meta: String
+        if active {
+            meta = gradeSourceReady
+                ? "\(gradeSourceSize) · 线性交接图 · sRGB 显示"
+                : "正在生成交接图…"
+        } else {
+            meta = "调色台"
+        }
         return GradeSnapshot(
             photo: item,
-            handoffMeta: "\(item.dimensions) · \(item.film) · 16-bit ProPhoto 线性交接图",
-            previewImage: photo.id == selectedID ? previewImage : previewCache[photo.id]
+            handoffMeta: meta,
+            previewImage: active ? gradePreviewImage : nil,
+            sourceReady: active && gradeSourceReady,
+            sourceSize: active ? gradeSourceSize : "",
+            analysis: active ? gradeAnalysis : nil,
+            presets: gradePresets,
+            luts: gradeLUTs,
+            recipe: gradeRecipe,
+            phase: active ? gradePhase : .idle,
+            histogram: active ? (gradeHistogram ?? PreviewData.histogram) : PreviewData.histogram,
+            statusMessage: statusMessage
         )
     }
 
@@ -718,14 +1295,18 @@ extension EngineHost {
     }
 
     func quickGroups(edit: PhotoEdit, baseline: PhotoEdit) -> [QuickGroup] {
-        PreviewData.quickGroups.map { group in
+        let printOnly: Set<String> = ["print_brightness", "tonal_contrast"]
+        let disabledReason = edit.io.scanFilm
+            ? "正片扫描模式：管线跳过印相阶段，本项不参与成像"
+            : nil
+        return PreviewData.quickGroups.map { group in
             let axes = group.axes.map { axis in
                 QuickAxis(
                     id: axis.id, label: axis.label, range: axis.range,
                     step: axis.step, decimals: axis.decimals, suffix: axis.suffix,
                     baseValue: 0,
                     value: quickValue(axis.id, edit: edit, baseline: baseline),
-                    unavailableReason: nil
+                    unavailableReason: printOnly.contains(axis.id) ? disabledReason : nil
                 )
             }
             let pad = group.pad.map { template in
