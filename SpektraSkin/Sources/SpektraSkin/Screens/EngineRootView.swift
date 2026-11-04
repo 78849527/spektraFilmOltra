@@ -63,9 +63,12 @@ struct EngineRootView: View {
             withAnimation(SkinMotion.page) { screen = .library }
         }
         actions.openGrade = {
+            guard host.currentPhoto() != nil else { return }
+            host.beginGrade()
             withAnimation(SkinMotion.page) { screen = .grade }
         }
         actions.backToEditor = {
+            host.endGrade()
             withAnimation(SkinMotion.page) { screen = .editor }
         }
         actions.selectFilm = { host.setFilm($0) }
@@ -106,11 +109,24 @@ struct EngineRootView: View {
             }
         }
         actions.exportAs = { host.exportAs($0) }
+        actions.exportWithSettings = { host.export($0) }
         actions.renderScaleChanged = { host.setPreviewScale($0) }
         actions.reRender = { host.renderPreview() }
         actions.toggleFavorite = { host.toggleFavorite($0) }
         actions.setColorLabel = { host.setColorLabel($0, $1) }
         actions.removePhoto = { host.removePhoto($0) }
+        actions.gradeRecipeChanged = { host.setGradeRecipe($0) }
+        actions.gradePresetSaved = { host.saveGradePreset(name: $0, recipe: $1) }
+        actions.gradePresetDeleted = { host.deleteGradePreset(id: $0) }
+        actions.gradeLUTImported = {
+            let panel = NSOpenPanel()
+            panel.allowsMultipleSelection = false
+            panel.allowedContentTypes = [UTType(filenameExtension: "cube") ?? .data]
+            if panel.runModal() == .OK, let url = panel.url {
+                host.importGradeLUT(from: url)
+            }
+        }
+        actions.gradeExport = { host.exportGrade($0) }
         return actions
     }
 
