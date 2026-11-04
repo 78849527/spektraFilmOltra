@@ -9,16 +9,14 @@ struct PreviewStage: View {
     var previewImage: NSImage? = nil
     var originalImage: NSImage? = nil
     var previewScale: Double = 0.25
+    var renderPhase: RenderPhase = .idle
     let actions: SkinActions
 
     @State private var zoom: CGFloat = 1
     @State private var pan: CGSize = .zero
     @State private var rotation: Double = 0
     @State private var compare = false
-
-    private var displayedImage: NSImage? {
-        compare ? (originalImage ?? previewImage) : previewImage
-    }
+    @State private var compareSplit: CGFloat = 50
 
     var body: some View {
         ZStack {
@@ -52,7 +50,7 @@ struct PreviewStage: View {
                         .shadow(color: .black.opacity(0.48), radius: 22, y: 16)
 
                     ZStack {
-                        if let image = displayedImage {
+                        if let image = previewImage {
                             Image(nsImage: image)
                                 .resizable()
                                 .scaledToFill()
@@ -67,8 +65,23 @@ struct PreviewStage: View {
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .background(SkinColor.surface2)
                         }
+
+                        if compare, let original = originalImage {
+                            Image(nsImage: original)
+                                .resizable()
+                                .scaledToFill()
+                                .mask(alignment: .leading) {
+                                    Rectangle()
+                                        .frame(width: fit.width * compareSplit / 100)
+                                }
+                        }
                     }
                     .frame(width: fit.width, height: fit.height)
+                    .overlay {
+                        if compare, originalImage != nil {
+                            compareHandle
+                        }
+                    }
                     .scaleEffect(zoom)
                     .rotationEffect(.degrees(rotation))
                     .offset(pan)
@@ -96,7 +109,7 @@ struct PreviewStage: View {
 
             VStack(spacing: 0) {
                 HStack {
-                    Text(compare ? "原图" : "照片")
+                    Text(compare ? "原图 ↔ 显影" : "照片")
                         .font(.skin(10.5))
                         .foregroundStyle(SkinColor.text2)
                         .padding(.horizontal, 11)
@@ -114,6 +127,15 @@ struct PreviewStage: View {
                 }
 
                 Spacer(minLength: 0)
+
+                if renderPhase.isBusy {
+                    HStack {
+                        Spacer(minLength: 0)
+                        RenderProgressView(phase: renderPhase)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.bottom, 10)
+                }
 
                 HStack(alignment: .bottom, spacing: 16) {
                     Text("\(photo.filename) · \(photo.dimensions) · \(filmName) · \(paperName)")
@@ -136,6 +158,35 @@ struct PreviewStage: View {
             .padding(14)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// 原图/显影分割线：拖动改变裁剪比例。
+    private var compareHandle: some View {
+        GeometryReader { geo in
+            let centerX = geo.size.width * compareSplit / 100
+            ZStack(alignment: .leading) {
+                Rectangle()
+                    .fill(Color.white.opacity(0.72))
+                    .frame(width: 1)
+                    .position(x: centerX, y: geo.size.height / 2)
+
+                Circle()
+                    .fill(Color.white.opacity(0.92))
+                    .frame(width: 13, height: 13)
+                    .overlay(
+                        Circle().strokeBorder(Color.black.opacity(0.35), lineWidth: 1)
+                    )
+                    .position(x: centerX, y: geo.size.height / 2)
+            }
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        let width = max(geo.size.width, 1)
+                        compareSplit = min(max(value.location.x / width * 100, 2), 98)
+                    }
+            )
+        }
     }
 }
 
@@ -321,6 +372,59 @@ private struct PreviewToolbar: View {
     private var divider: some View {
         SkinVerticalHairline(color: SkinColor.hairlineStrong, height: 14)
             .padding(.horizontal, 3)
+    }
+}
+
+private struct RenderProgressView: View {
+    let phase: RenderPhase
+
+    var body: some View {
+        VStack(spacing: 5) {
+            HStack(spacing: 8) {
+                Text(phase.label)
+                    .font(.skin(10.5, .medium))
+                    .foregroundStyle(SkinColor.text2)
+                    .lineLimit(1)
+
+                Spacer(minLength: 8)
+
+                Text(phase.index == 0 ? "…" : "\(phase.index)/\(max(phase.total, 1))")
+                    .font(.skin(10).monospacedDigit())
+                    .foregroundStyle(SkinColor.text3)
+            }
+
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(SkinColor.hairlineStrong)
+                        .frame(height: 3)
+                    Capsule()
+                        .fill(SkinColor.accent)
+                        .frame(
+                            width: geo.size.width * progressFraction,
+                            height: 3
+                        )
+                }
+            }
+            .frame(height: 3)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .frame(width: 232)
+        .background(
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(SkinColor.surface1.opacity(0.94))
+                .shadow(color: .black.opacity(0.32), radius: 12, y: 5)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .strokeBorder(SkinColor.hairlineStrong, lineWidth: 1)
+        )
+    }
+
+    private var progressFraction: CGFloat {
+        guard phase.index > 0, phase.total > 0 else { return 0.38 }
+        return CGFloat(min(1, Double(phase.index) / Double(phase.total)))
     }
 }
 

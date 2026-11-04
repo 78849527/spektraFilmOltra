@@ -5,9 +5,13 @@ struct EditorView: View {
     let presets: PresetCatalog
     let actions: SkinActions
 
+    @State private var exportSettingsOpen = false
+
     var body: some View {
         VStack(spacing: 0) {
-            EditorTopBar(snapshot: snapshot, actions: actions)
+            EditorTopBar(snapshot: snapshot, actions: actions) {
+                exportSettingsOpen = true
+            }
 
             HStack(spacing: 0) {
                 PresetRail(
@@ -28,6 +32,7 @@ struct EditorView: View {
                         previewImage: snapshot.previewImage,
                         originalImage: snapshot.originalImage,
                         previewScale: snapshot.previewScale,
+                        renderPhase: snapshot.renderPhase,
                         actions: actions
                     )
                     Filmstrip(
@@ -46,6 +51,16 @@ struct EditorView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(SkinColor.app)
+        .sheet(isPresented: $exportSettingsOpen) {
+            ExportSettingsSheet(
+                photo: snapshot.photo,
+                onCancel: { exportSettingsOpen = false },
+                onExport: { settings in
+                    exportSettingsOpen = false
+                    actions.exportWithSettings(settings)
+                }
+            )
+        }
     }
 }
 
@@ -54,6 +69,7 @@ struct EditorView: View {
 private struct EditorTopBar: View {
     let snapshot: EditorSnapshot
     let actions: SkinActions
+    var onExportSettings: () -> Void = {}
 
     var body: some View {
         HStack(spacing: 10) {
@@ -93,7 +109,7 @@ private struct EditorTopBar: View {
                         .frame(width: 5, height: 5)
                 }
 
-                GradeSplitButton(actions: actions)
+                GradeSplitButton(actions: actions, onExportSettings: onExportSettings)
             }
         }
         .padding(.horizontal, 16)
@@ -107,6 +123,7 @@ private struct EditorTopBar: View {
 
 private struct GradeSplitButton: View {
     let actions: SkinActions
+    var onExportSettings: () -> Void = {}
 
     @State private var hovered = false
 
@@ -131,6 +148,8 @@ private struct GradeSplitButton: View {
                 .frame(width: 1, height: 15)
 
             Menu {
+                Button("导出设置…") { onExportSettings() }
+                Divider()
                 Button("导出 16-bit TIFF（sRGB）") { actions.exportAs("tiff16") }
                 Button("导出 16-bit TIFF（ProPhoto 线性）") { actions.exportAs("tiff16-prophoto") }
                 Button("导出 8-bit TIFF") { actions.exportAs("tiff8") }
