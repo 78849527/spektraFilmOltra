@@ -111,5 +111,16 @@
 - [x] 调色导出：全尺寸显影 → 线性交接 → 调色 → 目标色彩空间转换 → TIFF/EXR
 - 验收：`HostSmoke` identity 配方与 sRGB 编码最大差 0；identity LUT 最大差 1.1e-16；12 MP DNG 交接图 8 s、暖调导出 1200 px TIFF 6.3 MB
 
+## 后续计划（未开工）：双层渲染（LUT 预测 + 物理精算）
+> 2026-11-04 用户决定：本轮只更新计划文档，不改代码。Python 与 Swift 均未实现；Swift 方案见 `docs/PORTING_PLAN.md` §14。
+- [ ] P0 实测：现有预览 6 段耗时、33³ 烘焙耗时、缓存命中率
+- [ ] P1 `PreviewLUTService`：log shaper、一次 grid 烘焙、Float32 四面体、LRU；不接 UI
+- [ ] P1 精度门禁 `Tools/LUTFidelity`：移植 CIEDE2000，ΔE₀₀ max ≤2.0 / p99 ≤1.0
+- [ ] P2 `EngineHost`：拖动 D0（<50 ms）、停手 400 ms D1、200 ms 渐变、过期帧丢弃
+- [ ] P2 三档设置：关闭/标准/高质量，默认关闭；入口待定
+- [ ] P2 `PreviewStage`：D0/D1 双层与「预测/准算/精算」角标
+- [ ] P3 导出/交接前预检、差异提示、强制精算开关
+- 验收：拖动首帧 <50 ms；1/2 比例停手 ≤1.5 s；ΔE₀₀ max ≤2.0 / p99 ≤1.0；导出与精算预览逐像素一致
+
 
 
