@@ -101,6 +101,15 @@ export interface ExportSettings {
   filename_template: string
 }
 
+export interface HandoffInfo {
+  path: string
+  width: number
+  height: number
+  bytes: number
+  color_space: string
+  source_color_space?: string
+}
+
 export interface JobStatus {
   id: string
   kind: string
@@ -108,6 +117,17 @@ export interface JobStatus {
   progress: { label: string; index: number; total: number }
   result: Record<string, unknown> | null
   error: string | null
+}
+
+export interface PhotoExif {
+  make: string
+  model: string
+  lens: string
+  exposure: string
+  aperture: string
+  iso: string
+  focal_length: string
+  taken_at: string
 }
 
 export interface OpenedPhoto {
@@ -119,6 +139,7 @@ export interface OpenedPhoto {
   color_space: string
   cctf_decoding: boolean
   lens_summary: string
+  exif?: PhotoExif
   original_preview: string
   display_preview: string
   state: StateTree

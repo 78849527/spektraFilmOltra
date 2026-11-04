@@ -50,6 +50,21 @@ function hashStr(value: string): string {
   return (h >>> 0).toString(36)
 }
 
+const MOCK_CAMERAS = [
+  { make: 'Canon', model: 'Canon EOS R5', lens: 'RF24-70mm F2.8 L IS USM', exposure: '1/250', aperture: '4', iso: '400', focal_length: '35', taken_at: '2026:10:18 16:42:11' },
+  { make: 'NIKON CORPORATION', model: 'NIKON Z 7_2', lens: 'NIKKOR Z 24-70mm f/2.8 S', exposure: '1/500', aperture: '2.8', iso: '200', focal_length: '50', taken_at: '2026:10:18 15:10:02' },
+  { make: 'SONY', model: 'ILCE-7RM4', lens: 'FE 35mm F1.4 GM', exposure: '1/125', aperture: '1.4', iso: '100', focal_length: '35', taken_at: '2026:10:17 09:21:30' },
+  { make: 'FUJIFILM', model: 'X-T4', lens: 'XF23mmF1.4 R', exposure: '1/60', aperture: '2', iso: '800', focal_length: '23', taken_at: '2026:10:16 18:05:44' },
+  { make: 'Apple', model: 'iPhone 15 Pro', lens: 'Main Camera 24mm f/1.78', exposure: '1/120', aperture: '1.78', iso: '64', focal_length: '24', taken_at: '2026:10:20 12:33:09' },
+  { make: 'Xiaomi', model: 'Xiaomi 14 Ultra', lens: 'Leica Summilux 23mm', exposure: '1/200', aperture: '1.63', iso: '50', focal_length: '23', taken_at: '2026:10:19 08:14:52' },
+]
+
+function pickExif(path: string) {
+  let seed = 0
+  for (let index = 0; index < path.length; index += 1) seed = (seed + path.charCodeAt(index)) % 997
+  return MOCK_CAMERAS[seed % MOCK_CAMERAS.length]
+}
+
 function quickPayload() {
   return { intents: { ...intents }, axes: axisSpecs, disabled: [] as string[] }
 }
@@ -275,6 +290,7 @@ export function handle(method: string, endpoint: string, body?: Record<string, u
       original_preview: `${path}@original`,
       display_preview: `${path}@display`,
       state: clone(state),
+      exif: pickExif(path),
     }
     return opened
   }
@@ -337,6 +353,7 @@ export function handle(method: string, endpoint: string, body?: Record<string, u
         width: 6000,
         height: 4000,
         source_color_space: 'sRGB',
+        bytes: 412000000,
       }),
       260,
     )

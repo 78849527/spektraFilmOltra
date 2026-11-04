@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { errorMessage, request } from './api'
-import type { Bootstrap, ItemRecord, LibrarySnapshot } from './types'
+import type { Bootstrap, HandoffInfo, ItemRecord, LibrarySnapshot } from './types'
 import { LibraryPage } from './pages/LibraryPage'
 import { EditorPage } from './pages/EditorPage'
 import { GradePage } from './pages/GradePage'
@@ -8,7 +8,7 @@ import { GradePage } from './pages/GradePage'
 type Route =
   | { kind: 'library' }
   | { kind: 'editor'; item: ItemRecord }
-  | { kind: 'grade'; item: ItemRecord; handoff: string }
+  | { kind: 'grade'; item: ItemRecord; handoff: HandoffInfo }
 
 interface ToastState {
   message: string

@@ -11,6 +11,8 @@ import secrets
 import sys
 import threading
 
+from spektrafilm_gui.app_paths import migrate_legacy_app_dirs
+
 from spektrafilm_service.server import make_server
 
 
@@ -24,6 +26,7 @@ def _warmup() -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    migrate_legacy_app_dirs()
     parser = argparse.ArgumentParser(prog='spektrafilm_service')
     parser.add_argument('--port', type=int, default=0)
     parser.add_argument('--token', default='')

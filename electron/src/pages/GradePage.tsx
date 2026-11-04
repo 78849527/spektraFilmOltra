@@ -5,7 +5,8 @@ import { ExportDialog } from '../components/ExportDialog'
 import { Histogram } from '../components/Histogram'
 import { Icon } from '../components/Icons'
 import { useElementSize, useSmoothScroll } from '../components/scroll'
-import type { Bootstrap, ExportSettings, ItemRecord, PresetEntry, Recipe } from '../types'
+import { formatBytes, formatSize } from '../state'
+import type { Bootstrap, ExportSettings, HandoffInfo, ItemRecord, PresetEntry, Recipe } from '../types'
 import './pages.css'
 
 interface GradePreview {
@@ -49,7 +50,7 @@ function read(root: unknown, path: string): number {
 
 function write<T extends object>(root: T, path: string, value: unknown): T {
   const next = JSON.parse(JSON.stringify(root)) as Record<string, unknown>
-  const parts = path.split('.')
+  const parts = path.split(/[\\/]/)
   let node = next
   for (const part of parts.slice(0, -1)) {
     const child = node[part]
@@ -58,6 +59,11 @@ function write<T extends object>(root: T, path: string, value: unknown): T {
   }
   node[parts[parts.length - 1]] = value
   return next as T
+}
+
+function basename(path: string): string {
+  const parts = path.split(/[\\/]/)
+  return parts[parts.length - 1] || path
 }
 
 export function GradePage({
@@ -69,7 +75,7 @@ export function GradePage({
 }: {
   bootstrap: Bootstrap
   item: ItemRecord
-  handoff: string
+  handoff: HandoffInfo
   onBack: () => void
   onNotify: (message: string, error?: boolean) => void
 }) {
@@ -102,7 +108,7 @@ export function GradePage({
       setBusy(true)
       try {
         const { job_id } = await request<{ job_id: string }>('POST', '/v1/grade/preview', {
-          handoff,
+          handoff: handoff.path,
           recipe: nextRecipe,
           edge: 1600,
         })
@@ -115,7 +121,7 @@ export function GradePage({
         setBusy(false)
       }
     },
-    [handoff, onNotify],
+    [handoff.path, onNotify],
   )
 
   useEffect(() => {
@@ -123,7 +129,7 @@ export function GradePage({
       void renderPreview(recipeRef.current)
     }, 120)
     return () => window.clearTimeout(timer)
-  }, [recipe, handoff, renderPreview])
+  }, [recipe, handoff.path, renderPreview])
 
   useEffect(() => {
     ;(async () => {
@@ -200,7 +206,7 @@ export function GradePage({
       // 边框目前只在前端叠加预览；后端渲染接口预留：
       // POST /v1/grade/export 增加 border = { color, width_fraction } 即可烘进成片。
       const { job_id } = await request<{ job_id: string }>('POST', '/v1/grade/export', {
-        handoff,
+        handoff: handoff.path,
         recipe: recipeRef.current,
         settings,
         name: item.name,
@@ -257,13 +263,7 @@ export function GradePage({
           显影台
         </Button>
 
-        <div className="editor-title grow">
-          <span className="editor-title-main truncate">{item.name}</span>
-          <span className="editor-title-sub truncate">
-            交接图 · 16-bit ProPhoto 线性
-            {preview ? ` · ${preview.width} × ${preview.height}` : ''}
-          </span>
-        </div>
+        <span className="grow" />
 
         <span className="badge badge-accent">调色台</span>
 
@@ -274,6 +274,25 @@ export function GradePage({
 
       <div className="grade-body">
         <aside className="grade-rail">
+          <div className="rail-info">
+            <div className="photo-meta">
+              <div className="photo-meta-head">
+                <span className="photo-meta-titles">
+                  <span className="photo-meta-name truncate" title={basename(handoff.path)}>
+                    {basename(handoff.path)}
+                  </span>
+                  <span className="photo-meta-sub truncate">
+                    交接图 · 16-bit · {handoff.color_space} 线性
+                  </span>
+                </span>
+              </div>
+              <div className="photo-meta-line">
+                {formatSize(handoff.width, handoff.height)}<span className="dot">·</span>
+                {formatBytes(handoff.bytes)}
+              </div>
+            </div>
+          </div>
+
           <div className="grade-rail-tabs">
             <Tabs
               tabs={[

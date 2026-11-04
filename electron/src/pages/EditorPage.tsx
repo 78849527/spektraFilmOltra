@@ -4,6 +4,7 @@ import { Button, IconButton, Select, Tabs } from '../components/Controls'
 import { ExportDialog } from '../components/ExportDialog'
 import { Histogram } from '../components/Histogram'
 import { FilmGlyph, Icon, PaperGlyph } from '../components/Icons'
+import { BrandMark } from '../components/brands'
 import { ProPanel } from '../components/ProPanel'
 import { QuickPanel } from '../components/QuickPanel'
 import { useElementSize, useSmoothScroll } from '../components/scroll'
@@ -12,6 +13,7 @@ import { formatBytes, formatSize, readPath, selectionOf, setString } from '../st
 import type {
   Bootstrap,
   ExportSettings,
+  HandoffInfo,
   ItemRecord,
   LibrarySnapshot,
   OpenedPhoto,
@@ -51,13 +53,6 @@ function pickQuick(payload: QuickPayload): QuickPayload {
   return { intents: payload.intents, axes: payload.axes, disabled: payload.disabled }
 }
 
-function aspectLabel(width: number, height: number): string {
-  if (!width || !height) return '—'
-  const gcd = (a: number, b: number): number => (b ? gcd(b, a % b) : a)
-  const divisor = gcd(width, height)
-  return `${width / divisor}:${height / divisor}`
-}
-
 function clamp(value: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, value))
 }
@@ -75,7 +70,7 @@ export function EditorPage({
   library: LibrarySnapshot
   item: ItemRecord
   onBack: () => void
-  onGrade: (handoff: string) => void
+  onGrade: (handoff: HandoffInfo) => void
   onSwitchItem: (item: ItemRecord) => void
   onNotify: (message: string, error?: boolean) => void
 }) {
@@ -84,6 +79,7 @@ export function EditorPage({
   const [photo, setPhoto] = useState<OpenedPhoto | null>(null)
   const [preview, setPreview] = useState<PreviewState | null>(null)
   const [tab, setTab] = useState<'quick' | 'pro'>('quick')
+  const [railTab, setRailTab] = useState<'film' | 'paper'>('film')
   const [scale, setScale] = useState(0.5)
   const [busy, setBusy] = useState(false)
   const [progress, setProgress] = useState<ProgressState | null>(null)
@@ -440,8 +436,8 @@ export function EditorPage({
       const { job_id } = await request<{ job_id: string }>('POST', '/v1/handoff', {})
       const job = await waitForJob(job_id, (status) => setProgress(status.progress))
       setProgress(null)
-      const result = job.result as unknown as { path: string }
-      onGrade(result.path)
+      const result = job.result as unknown as HandoffInfo
+      onGrade(result)
     } catch (error) {
       onNotify(errorMessage(error), true)
       setProgress(null)
@@ -515,6 +511,20 @@ export function EditorPage({
     }
     return options
   }, [fitMode, zoom])
+
+  const exif = photo?.exif
+  const cameraLabel = exif?.model || exif?.make || '未知机身'
+  const lensLabel = exif?.lens || '未知镜头'
+  const megapixels = Math.round((item.width * item.height) / 1e6)
+  const params = exif
+    ? [
+        exif.iso ? `ISO ${exif.iso}` : '',
+        exif.focal_length ? `${exif.focal_length} mm` : '',
+        exif.aperture ? `ƒ${exif.aperture}` : '',
+        exif.exposure ? `${exif.exposure} s` : '',
+      ].filter(Boolean)
+    : []
+
   return (
     <div className="editor-page">
       <header className="editor-topbar">
@@ -522,13 +532,7 @@ export function EditorPage({
           照片库
         </Button>
 
-        <div className="editor-title grow">
-          <span className="editor-title-main truncate">{item.name}</span>
-          <span className="editor-title-sub truncate">
-            {photo ? formatSize(photo.width, photo.height) : '—'} · {selection.film || '未选择胶片'} ·{' '}
-            {selection.paper || '未选择相纸'}
-          </span>
-        </div>
+        <span className="grow" />
 
         <IconButton
           name={favorite ? 'starFill' : 'star'}
@@ -550,50 +554,94 @@ export function EditorPage({
 
       <div className="editor-body">
         <aside className="editor-rail">
+          <div className="rail-info">
+            <div className="photo-meta">
+              <div className="photo-meta-head">
+                <span className="photo-brand">
+                  <BrandMark make={exif?.make} model={exif?.model} size={40} />
+                </span>
+                <span className="photo-meta-titles">
+                  <span className="photo-meta-name truncate" title={item.name}>
+                    {item.name}
+                  </span>
+                  <span className="photo-meta-sub truncate" title={cameraLabel}>
+                    {cameraLabel}
+                  </span>
+                </span>
+              </div>
+              <div className="photo-meta-block">
+                <div className="photo-meta-lens truncate" title={lensLabel}>
+                  {lensLabel}
+                </div>
+                <div className="photo-meta-line">
+                  {megapixels} MP<span className="dot">•</span>
+                  {formatSize(item.width, item.height)}<span className="dot">•</span>
+                  {formatBytes(item.file_size)}<span className="dot">•</span>
+                  {photo ? photo.color_space : '—'}
+                </div>
+              </div>
+              {params.length > 0 ? (
+                <div className="photo-meta-params">
+                  {params.map((value, index) => (
+                    <span key={index}>{value}</span>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          </div>
+
+          <div className="rail-tabs">
+            <Tabs
+              tabs={[
+                { value: 'film', label: '胶片' },
+                { value: 'paper', label: '相纸' },
+              ]}
+              value={railTab}
+              onChange={setRailTab}
+            />
+          </div>
+
           <div className="rail-scroll" ref={railRef}>
-            {filmsByKind.map(([kind, entries]) => (
-              <div key={kind}>
-                <div className="rail-group-title">{kind}</div>
-                {entries.map((film) => (
+            {railTab === 'film'
+              ? filmsByKind.map(([kind, entries]) => (
+                  <div key={kind}>
+                    <div className="rail-group-title">{kind}</div>
+                    {entries.map((film) => (
+                      <button
+                        key={film.id}
+                        className={`preset-card${selection.film === film.id ? ' active' : ''}`}
+                        onClick={() => selectProfile('film', film.id)}
+                        title={`${film.display_name} · ${film.name}`}
+                      >
+                        <span className="preset-glyph">
+                          <FilmGlyph size={26} tint={`hsl(${filmIndexHue(film.id)} 46% 62%)`} />
+                        </span>
+                        <span className="stack grow" style={{ minWidth: 0 }}>
+                          <span className="preset-name truncate">{film.display_name}</span>
+                          <span className="preset-meta truncate">
+                            {film.type === 'reversal' ? '正片' : film.kind === 'cinema' ? '电影' : '负片'} · {film.name}
+                          </span>
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                ))
+              : bootstrap.papers.map((paper) => (
                   <button
-                    key={film.id}
-                    className={`preset-card${selection.film === film.id ? ' active' : ''}`}
-                    onClick={() => selectProfile('film', film.id)}
-                    title={`${film.display_name} · ${film.name}`}
+                    key={paper.id}
+                    className={`preset-card${selection.paper === paper.id ? ' active' : ''}`}
+                    onClick={() => selectProfile('paper', paper.id)}
+                    title={paper.display_name}
                   >
                     <span className="preset-glyph">
-                      <FilmGlyph size={26} tint={`hsl(${filmIndexHue(film.id)} 46% 62%)`} />
+                      <PaperGlyph size={26} tint={`hsl(${filmIndexHue(paper.id)} 14% 70%)`} />
                     </span>
                     <span className="stack grow" style={{ minWidth: 0 }}>
-                      <span className="preset-name truncate">{film.display_name}</span>
-                      <span className="preset-meta truncate">
-                        {film.type === 'reversal' ? '正片' : film.kind === 'cinema' ? '电影' : '负片'} · {film.name}
-                      </span>
+                      <span className="preset-name truncate">{paper.display_name}</span>
+                      <span className="preset-meta truncate">{paper.name}</span>
                     </span>
                   </button>
                 ))}
-              </div>
-            ))}
-
-            <div className="rail-group-title" style={{ marginTop: 16 }}>
-              相纸
-            </div>
-            {bootstrap.papers.map((paper) => (
-              <button
-                key={paper.id}
-                className={`preset-card${selection.paper === paper.id ? ' active' : ''}`}
-                onClick={() => selectProfile('paper', paper.id)}
-                title={paper.display_name}
-              >
-                <span className="preset-glyph">
-                  <PaperGlyph size={26} tint={`hsl(${filmIndexHue(paper.id)} 14% 70%)`} />
-                </span>
-                <span className="stack grow" style={{ minWidth: 0 }}>
-                  <span className="preset-name truncate">{paper.display_name}</span>
-                  <span className="preset-meta truncate">{paper.name}</span>
-                </span>
-              </button>
-            ))}
           </div>
         </aside>
 
@@ -773,20 +821,6 @@ export function EditorPage({
             />
           </div>
           <div className="inspector-body" ref={inspectorRef}>
-            <div className="photo-info">
-              <div className="photo-info-top">
-                <span className="photo-info-name truncate" title={item.name}>
-                  {item.name}
-                </span>
-                <span className="photo-info-bytes">{formatBytes(item.file_size)}</span>
-              </div>
-              <div className="photo-info-tags">
-                <span className="photo-tag">{formatSize(item.width, item.height)}</span>
-                <span className="photo-tag">{aspectLabel(item.width, item.height)}</span>
-                <span className="photo-tag">{item.is_raw ? 'RAW' : 'RGB'}</span>
-                {photo ? <span className="photo-tag">{photo.color_space}</span> : null}
-              </div>
-            </div>
 
             <Histogram src={mediaSrc} />
             {photo ? (

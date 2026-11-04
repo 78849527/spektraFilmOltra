@@ -31,7 +31,8 @@ const RAW_EXTENSIONS = [
 const IMAGE_EXTENSIONS = ['tif', 'tiff', 'png', 'jpg', 'jpeg', 'bmp', 'webp', 'exr', 'hdr', ...RAW_EXTENSIONS]
 
 function mediaRoot(): string {
-  return path.join(app.getPath('appData'), 'Spektrafilm')
+  // Must match spektrafilm_gui.app_paths.APP_NAME on the Python side.
+  return path.join(app.getPath('appData'), 'SpektraOltra')
 }
 
 function isAllowedMedia(filePath: string): boolean {

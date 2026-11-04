@@ -46,6 +46,39 @@ class FullRender:
     cctf_encoding: bool
 
 
+def exif_payload(metadata: Any) -> dict[str, str]:
+    """把 EXIF 里的机身、镜头与曝光参数整理成前端可直接显示的字段。"""
+    exif = getattr(metadata, 'exif', None) if metadata is not None else None
+    if exif is None:
+        return {}
+
+    data: dict[str, str] = {}
+    for item in exif:
+        try:
+            key = item.key()
+            text = str(item)
+        except Exception:
+            continue
+        prefix = key + ': '
+        if text.startswith(prefix):
+            text = text[len(prefix):]
+        data[key] = text.strip()
+
+    def value(key: str) -> str:
+        return data.get(key, '').strip()
+
+    return {
+        'make': value('Exif.Image.Make'),
+        'model': value('Exif.Image.Model'),
+        'lens': value('Exif.Photo.LensModel'),
+        'exposure': value('Exif.Photo.ExposureTime').replace(' s', '').strip(),
+        'aperture': value('Exif.Photo.FNumber').lstrip('Ff').strip(),
+        'iso': value('Exif.Photo.PhotographicSensitivity') or value('Exif.Photo.ISOSpeedRatings'),
+        'focal_length': value('Exif.Photo.FocalLength').replace(' mm', '').strip(),
+        'taken_at': value('Exif.Photo.DateTimeOriginal'),
+    }
+
+
 @dataclass
 class PhotoSession:
     path: str
@@ -186,6 +219,7 @@ class ServiceSession:
                 'color_space': photo.color_space,
                 'cctf_decoding': photo.cctf_decoding,
                 'lens_summary': photo.lens_summary,
+            'exif': exif_payload(photo.metadata),
                 'original_preview': str(photo.original_preview_path),
                 'display_preview': str(photo.display_preview_path),
                 'state': self.state_dict(),
@@ -202,6 +236,7 @@ class ServiceSession:
             'is_raw': photo.is_raw,
             'color_space': photo.color_space,
             'lens_summary': photo.lens_summary,
+            'exif': exif_payload(photo.metadata),
         }
 
     # ── 预览 ────────────────────────────────────────────────
@@ -372,6 +407,7 @@ class ServiceSession:
         develop.write_handoff(target, full.image, full.output_color_space)
         return {
             'path': str(target),
+            'bytes': int(target.stat().st_size),
             'color_space': develop.HANDOFF_COLOR_SPACE,
             'width': int(full.image.shape[1]),
             'height': int(full.image.shape[0]),

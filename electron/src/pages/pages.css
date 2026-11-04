@@ -256,30 +256,6 @@
   border-bottom: 1px solid var(--hairline-faint);
 }
 
-/* 标题整块压到 28px，与左侧按钮同高 */
-.editor-title {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 2px;
-  min-width: 0;
-  height: 28px;
-}
-
-.editor-title-main {
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 1.15;
-  color: var(--text-1);
-}
-
-.editor-title-sub {
-  font-size: 9.5px;
-  line-height: 1.15;
-  color: var(--text-4);
-  font-variant-numeric: tabular-nums;
-}
-
 .split-button {
   display: inline-flex;
   align-items: center;
@@ -702,50 +678,6 @@
 }
 
 /* 照片信息区：两行，占位克制 */
-.photo-info {
-  padding: 8px 9px;
-  border-radius: var(--radius-card);
-  background: var(--surface-1);
-  border: 1px solid var(--hairline-faint);
-  margin-bottom: 8px;
-}
-
-.photo-info-top {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 6px;
-}
-
-.photo-info-name {
-  font-size: 11.5px;
-  color: var(--text-1);
-  min-width: 0;
-}
-
-.photo-info-bytes {
-  flex: 0 0 auto;
-  font-family: var(--font-mono);
-  font-size: 10px;
-  color: var(--text-2);
-}
-
-.photo-info-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-
-.photo-tag {
-  font-family: var(--font-mono);
-  font-size: 9.5px;
-  color: var(--text-3);
-  padding: 1px 5px;
-  border-radius: 3px;
-  background: var(--fill-2);
-  white-space: nowrap;
-}
 
 .histogram {
   width: 100%;
@@ -1085,4 +1017,122 @@
 .border-preview {
   position: relative;
   isolation: isolate;
+}
+/* ── 左栏：顶部信息框（占 1/5）+ tab ─────────────────── */
+
+.rail-tabs {
+  padding: 6px 10px 0;
+}
+/* 左栏照片信息：品牌标识 + 机身镜头 + 拍摄参数 */
+
+/* 左栏照片信息：纯文字排版，不画框、不用胶囊 */
+.rail-info {
+  flex: 0 0 20%;
+  min-height: 0;
+  padding: 10px;
+  overflow: hidden;
+}
+
+.photo-meta {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  padding: 12px 12px 15px;
+  gap: 10px;
+  min-width: 0;
+  background: var(--surface-2);
+  border-radius: 12px;
+}
+
+.photo-meta-head {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  min-width: 0;
+}
+
+.photo-brand {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-2);
+  opacity: 1;
+  line-height: 0;
+}
+
+.photo-meta-titles {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.photo-meta-name {
+  font-size: 11px;
+  color: var(--text-1);
+  letter-spacing: 0.01em;
+  line-height: 1.25;
+}
+
+.photo-meta-sub {
+  font-size: 8.5px;
+  color: var(--text-4);
+  line-height: 1.25;
+}
+
+
+.photo-meta-line {
+  font-size: 10px;
+  color: var(--text-3);
+  line-height: 1.45;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.photo-meta-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  border-top: 1px solid var(--hairline-faint);
+  padding-top: 9px;
+}
+
+.photo-meta-lens {
+  font-size: 10px;
+  color: var(--text-2);
+}
+
+.photo-meta-params {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  align-items: center;
+  border-top: 1px solid var(--hairline-faint);
+  padding-top: 5px;
+}
+
+.photo-meta-params span {
+  text-align: center;
+  font-size: 10px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-left: 1px solid var(--hairline-faint);
+  padding: 0 4px;
+}
+
+.photo-meta-params span:first-child {
+  border-left: none;
+}
+
+.photo-meta-line .dot {
+  margin: 0 7px;
+  opacity: 0.32;
 }
