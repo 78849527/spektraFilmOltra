@@ -387,7 +387,7 @@ def load_dichroic_filters(wavelengths, brand='thorlabs'):
     filters = np.zeros((np.size(wavelengths), 3))
     for i, channel in enumerate(channels):
         package = pkg_resources.files('spektrafilm.data.filters.dichroics')
-        filename = brand+'/filter_'+channel+'.csv'
+        filename = brand+'/filter_'+channel+'.dat'
         resource = package / filename
         with resource.open("r") as file:
             data = np.loadtxt(file, delimiter=',')
@@ -400,7 +400,7 @@ def load_dichroic_filters(wavelengths, brand='thorlabs'):
 def load_filter(wavelengths, name='KG3', brand='schott', filter_type='heat_absorbing', percent_transmittance=False):
     transmittance = np.zeros_like(wavelengths)
     package = pkg_resources.files('spektrafilm.data.filters.'+filter_type)
-    filename = brand+'/'+name+'.csv'
+    filename = brand+'/'+name+'.dat'
     resource = package / filename
     if percent_transmittance: scale = 100
     else: scale = 1
