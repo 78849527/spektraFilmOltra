@@ -36,22 +36,42 @@ function resolveRepoRoot(): string {
   return process.env.SPEKTRA_SERVICE_ROOT || path.resolve(__dirname, '..', '..')
 }
 
+
+/** 打包后引擎以 PyInstaller 目录形式放在 resources/spektra-engine 下，直接跑 exe。 */
+function resolvePackagedEngine(): string | null {
+  const exe = process.platform === 'win32' ? 'spektra-engine.exe' : 'spektra-engine'
+  const candidates = [
+    path.join(process.resourcesPath, 'spektra-engine', exe),
+    path.join(path.resolve(__dirname, '..', '..'), 'spektra-engine', exe),
+  ]
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate
+  }
+  return null
+}
+
 export async function startSidecar(): Promise<SidecarHandle> {
   const repoRoot = resolveRepoRoot()
-  const python = resolvePython()
-  const child = spawn(
-    python,
-    ['-m', 'spektrafilm_service', '--port', '0'],
-    {
-      cwd: repoRoot,
-      env: {
-        ...process.env,
-        PYTHONPATH: path.join(repoRoot, 'src'),
-        PYTHONUNBUFFERED: '1',
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    },
-  )
+  const packagedEngine = resolvePackagedEngine()
+  const child = packagedEngine
+    ? spawn(packagedEngine, ['--port', '0'], {
+        cwd: path.dirname(packagedEngine),
+        env: { ...process.env, PYTHONUNBUFFERED: '1' },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+    : spawn(
+        resolvePython(),
+        ['-m', 'spektrafilm_service', '--port', '0'],
+        {
+          cwd: repoRoot,
+          env: {
+            ...process.env,
+            PYTHONPATH: path.join(repoRoot, 'src'),
+            PYTHONUNBUFFERED: '1',
+          },
+          stdio: ['ignore', 'pipe', 'pipe'],
+        },
+      )
 
   let buffer = ''
   let stderrTail = ''
