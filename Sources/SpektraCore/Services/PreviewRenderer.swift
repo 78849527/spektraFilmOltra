@@ -1,5 +1,10 @@
 import Foundation
+import CoreGraphics
+#if os(macOS)
 import AppKit
+#else
+import UIKit
+#endif
 
 /// 预览渲染调度：串行队列 + 代际取消 + 共享 LUT 缓存 + 预览降采样。
 /// 只保留最后一次请求的结果，过期结果直接丢弃。
@@ -76,28 +81,19 @@ final class PreviewRenderer {
     }
 
     /// 8-bit sRGB 显示图（预览仅用于屏幕显示）。
-    static func nsImage(from image: ImageRGB) -> NSImage? {
-        let width = image.width
-        let height = image.height
-        guard width > 0, height > 0 else { return nil }
-        var pixels = [UInt8](repeating: 255, count: width * height * 4)
-        for i in 0..<(width * height) {
-            for c in 0..<3 {
-                let raw = image.data[i * 3 + c]
-                let value = raw.isFinite ? min(max(raw, 0), 1) : 0
-                pixels[i * 4 + c] = UInt8((value * 255).rounded())
-            }
-        }
-        let space = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
-        let cgImage: CGImage? = pixels.withUnsafeMutableBytes { buffer -> CGImage? in
-            guard let context = CGContext(
-                data: buffer.baseAddress, width: width, height: height,
-                bitsPerComponent: 8, bytesPerRow: width * 4, space: space,
-                bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
-            ) else { return nil }
-            return context.makeImage()
-        }
-        guard let cgImage else { return nil }
-        return NSImage(cgImage: cgImage, size: NSSize(width: width, height: height))
+    static func cgImage(from image: ImageRGB) -> CGImage? {
+        ImageBridge.cgImage(from: image)
     }
+
+    #if os(macOS)
+    static func nsImage(from image: ImageRGB) -> NSImage? {
+        guard let cgImage = ImageBridge.cgImage(from: image) else { return nil }
+        return NSImage(cgImage: cgImage, size: NSSize(width: image.width, height: image.height))
+    }
+    #else
+    static func uiImage(from image: ImageRGB) -> UIImage? {
+        guard let cgImage = ImageBridge.cgImage(from: image) else { return nil }
+        return UIImage(cgImage: cgImage)
+    }
+    #endif
 }

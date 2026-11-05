@@ -8,7 +8,7 @@ import Foundation
 ///
 /// 相机曝光、印相曝光、印相曝光补偿在表间按对数域偏移施加，改这些滑杆不重烘。
 /// 空间/随机效果由 `debug.lutMode` 关闭；正片扫描模式没有印相段，直接跳过预测。
-final class PreviewLUTService {
+final class PreviewLUTService: @unchecked Sendable {
     /// 45³ 在真实 RAW 上 p99 会超过 1.0；65³ 实测 max 1.22 / p99 0.86。
     static let defaultResolution = 65
 
@@ -88,7 +88,10 @@ final class PreviewLUTService {
             return ratio
         }
 
-        /// 在预测链上跑一张输入图，返回线性 ProPhoto。
+        /// 在预测链上跑一张输入图，返回线性 sRGB（与精算管线色彩空间对齐）。
+        ///
+        /// 滤色偏移（yFilterShift / mFilterShift）不进 LUT，滤色效果由精算管线处理。
+        /// 这样滤色改动不会触发重烘焙，predict 始终即时返回。
         func predict(source: ImageRGB, autoEV: Double = 0, exposureEV: Double = 0,
                      printExposure: Double = 1, compensate: Bool = false) -> ImageRGB {
             guard source.width > 0, source.height > 0 else { return source }
@@ -220,13 +223,39 @@ final class PreviewLUTService {
         )
     }
 
+    /// 烘焙参数：确定性管线 + 连续轴归零 + 色彩空间对齐精算。
+    /// 显式设置所有需要关闭的字段，不依赖 Pipeline.init 中 lutMode 块的隐式行为。
     private static func makeBakeParams(_ params: RuntimePhotoParams) -> RuntimePhotoParams {
         var p = params
         p.debug.lutMode = true
+        p.debug.deactivateSpatialEffects = true
+        p.debug.deactivateStochasticEffects = true
         p.settings.previewMode = false
+        p.settings.useEnlargerLUT = false
+        p.settings.useScannerLUT = false
+        p.camera.autoExposure = false
+        p.camera.exposureCompensationEV = 0
+        p.filmRender.halation.boostEV = 0
+        p.filmRender.grain.active = false
+        p.filmRender.grain.particleAreaUM2 = 0
+        p.filmRender.grain.blur = 0
+        p.filmRender.dirCouplers.diffusionSizeUM = 0
+        p.enlarger.lensBlur = 0
+        p.enlarger.printExposure = 1
+        p.enlarger.printExposureCompensation = false
+        p.enlarger.yFilterShift = 0
+        p.enlarger.mFilterShift = 0
+        p.enlarger.preflashExposure = 0
+        p.enlarger.preflashYFilterShift = 0
+        p.enlarger.preflashMFilterShift = 0
+        p.camera.lensBlurUM = 0
+        p.scanner.whiteCorrection = false
+        p.scanner.blackCorrection = false
+        p.scanner.unsharpMask = [0, 0]
+        p.scanner.lensBlur = 0
         p.io.crop = false
         p.io.upscaleFactor = 1
-        p.io.outputColorSpace = "ProPhoto RGB"
+        p.io.outputColorSpace = "sRGB"
         p.io.outputCCTFEncoding = false
         return p
     }
@@ -245,9 +274,12 @@ final class PreviewLUTService {
         p.scanner.unsharpMask = [0, 0]
         p.enlarger.printExposure = 1
         p.enlarger.printExposureCompensation = true
+        p.enlarger.yFilterShift = 0
+        p.enlarger.mFilterShift = 0
+        p.enlarger.preflashExposure = 0
         p.io.crop = false
         p.io.upscaleFactor = 1
-        p.io.outputColorSpace = "ProPhoto RGB"
+        p.io.outputColorSpace = "sRGB"
         p.io.outputCCTFEncoding = false
         return p
     }
@@ -458,36 +490,21 @@ final class PreviewLUTService {
 
     // MARK: - 显示
 
-    static let proPhotoToSRGB: Mat3 = {
-        let red = ColorMath.rgbToRGB(Vec3(1, 0, 0), from: "ProPhoto RGB", to: "sRGB")
-        let green = ColorMath.rgbToRGB(Vec3(0, 1, 0), from: "ProPhoto RGB", to: "sRGB")
-        let blue = ColorMath.rgbToRGB(Vec3(0, 0, 1), from: "ProPhoto RGB", to: "sRGB")
-        return Mat3([
-            red.x, green.x, blue.x,
-            red.y, green.y, blue.y,
-            red.z, green.z, blue.z,
-        ])
-    }()
-
-    /// 线性 ProPhoto → sRGB 显示编码（0…1）。
+    /// 线性 sRGB → sRGB 显示编码（0…1）。
+    /// 烘焙管线现在直接输出线性 sRGB（outputColorSpace=sRGB），不再需要 ProPhoto→sRGB 矩阵。
     static func displayImage(fromLinear image: ImageRGB) -> ImageRGB {
         let width = image.width
         let height = image.height
         var output = image
-        let matrix = proPhotoToSRGB
         output.data.withUnsafeMutableBufferPointer { buffer in
             guard let base = buffer.baseAddress else { return }
             func row(_ y: Int) {
                 let rowStart = y * width
                 for x in 0..<width {
                     let p = (rowStart + x) * 3
-                    let r = image.data[p].isFinite ? image.data[p] : 0
-                    let g = image.data[p + 1].isFinite ? image.data[p + 1] : 0
-                    let b = image.data[p + 2].isFinite ? image.data[p + 2] : 0
-                    let srgb = matrix.apply(Vec3(r, g, b))
-                    base[p] = clamp(CCTF.encode(srgb.x))
-                    base[p + 1] = clamp(CCTF.encode(srgb.y))
-                    base[p + 2] = clamp(CCTF.encode(srgb.z))
+                    base[p] = clamp(CCTF.encode(image.data[p].isFinite ? image.data[p] : 0))
+                    base[p + 1] = clamp(CCTF.encode(image.data[p + 1].isFinite ? image.data[p + 1] : 0))
+                    base[p + 2] = clamp(CCTF.encode(image.data[p + 2].isFinite ? image.data[p + 2] : 0))
                 }
             }
             if width * height >= 200_000 {
@@ -521,20 +538,27 @@ final class PreviewLUTService {
         )
     }
 
-    /// 烘焙键：连续轴（相机曝光、自动曝光、印相曝光/补偿）与快速意图不参与。
+    /// 烘焙键：连续轴（相机曝光、自动曝光、印相曝光/补偿、滤色偏移、预闪）与快速意图不参与。
+    /// 滤色偏移 / 预闪 / 空间随机效果由 makeBakeParams 显式归零，bake 时用中性基准值。
     static func cacheKey(edit: PhotoEdit, inputColorSpace: String,
                          inputCCTF: Bool) -> String {
         var e = edit
         e.camera.autoExposure = false
         e.camera.exposureCompensationEV = 0
         e.enlarger.printExposure = 1
+        e.enlarger.yFilterShift = 0
+        e.enlarger.mFilterShift = 0
+        e.enlarger.preflashExposure = 0
+        e.enlarger.preflashYFilterShift = 0
+        e.enlarger.preflashMFilterShift = 0
+        e.filmRender.halation.boostEV = 0
         // 印相曝光补偿决定是否需要补偿管线，不能从键里剔除（否则后开补偿会复用无管线缓存）。
         e.quickIntents = [:]
         e.io.inputColorSpace = inputColorSpace
         e.io.inputCCTFDecoding = inputCCTF
         e.io.crop = false
         e.io.upscaleFactor = 1
-        e.io.outputColorSpace = "ProPhoto RGB"
+        e.io.outputColorSpace = "sRGB"
         e.io.outputCCTFEncoding = false
         e.debug.lutMode = true
         let encoder = JSONEncoder()

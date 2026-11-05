@@ -101,8 +101,38 @@ enum ResourceLocator {
         return cwd.appendingPathComponent("Sources/SpektraCore/Resources/Data", isDirectory: true)
     }
 
+    private static let lock = NSLock()
+    private static var resolved: [String: URL] = [:]
+
     static func url(_ relative: String) -> URL {
-        dataRoot.appendingPathComponent(relative)
+        lock.lock()
+        if let cached = resolved[relative] {
+            lock.unlock()
+            return cached
+        }
+        lock.unlock()
+        let result = resolve(relative)
+        lock.lock()
+        resolved[relative] = result
+        lock.unlock()
+        return result
+    }
+
+    /// 仓库里目录名是小写（profiles / luts），代码里按 Profiles / LUTs 取。
+    /// macOS 大小写不敏感掩盖了差异，iOS 的 APFS 会直接找不到，这里逐级做大小写不敏感解析。
+    private static func resolve(_ relative: String) -> URL {
+        let direct = dataRoot.appendingPathComponent(relative)
+        if FileManager.default.fileExists(atPath: direct.path) { return direct }
+        var current = dataRoot
+        for part in relative.split(separator: "/").map(String.init) {
+            let items = (try? FileManager.default.contentsOfDirectory(atPath: current.path)) ?? []
+            if let match = items.first(where: { $0.caseInsensitiveCompare(part) == .orderedSame }) {
+                current.appendPathComponent(match)
+            } else {
+                current.appendPathComponent(part)
+            }
+        }
+        return current
     }
 }
 

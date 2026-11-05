@@ -1,0 +1,326 @@
+import Foundation
+import SwiftUI
+
+/// 调色会话：只接收显影会话产出的线性 ProPhoto 交接像素，
+/// 不在调色台里读取 RAW，也不反向修改显影参数。
+@MainActor
+final class MobileGradeSession: ObservableObject {
+    let photoID: String
+    let filename: String
+    private let store: LibraryStore
+    private let develop: MobileDevelopSession
+
+    @Published private(set) var previewImage: MPlatformImage?
+    @Published private(set) var originalImage: MPlatformImage?
+    @Published private(set) var isPreviewOriginal = false
+    @Published private(set) var sourceReady = false
+    @Published private(set) var isRendering = false
+    @Published private(set) var phaseLabel = ""
+    @Published private(set) var phaseProgress: Double = 0
+    @Published private(set) var errorMessage: String?
+    @Published private(set) var presets: [GradePreset] = []
+    @Published private(set) var luts: [GradeLUTEntry] = []
+    @Published private(set) var isExporting = false
+    @Published private(set) var lastSavedURL: URL?
+    @Published private(set) var previewAspect: CGFloat = 4.0 / 3.0
+
+    private let gradeQueue = DispatchQueue(label: "spektra.mobile.grade", qos: .userInitiated)
+    private var source: ImageRGB?
+    private var displayRecipe = MGradeRecipe()
+    private var lutPath = ""
+    private var token = 0
+    private var exportToken = 0
+    private var activeFlag: MCancelFlag?
+    private var pendingProxy: DispatchWorkItem?
+    private var pendingSettle: DispatchWorkItem?
+    private var proxyInFlight = false
+
+    private let proxyEdge = 800
+    private let fullEdge = 1600
+
+    init(photo: LibraryPhoto, store: LibraryStore, develop: MobileDevelopSession) {
+        self.photoID = photo.id
+        self.filename = photo.filename
+        self.store = store
+        self.develop = develop
+        self.presets = GradePresetStore.shared.all
+        self.luts = GradePresetStore.shared.luts()
+    }
+
+    // MARK: - 启动
+
+    func start() {
+        isRendering = true
+        phaseLabel = "生成交接图"
+        phaseProgress = 0
+        develop.prepareHandoff(maxEdge: fullEdge) { [weak self] image in
+            guard let self else { return }
+            guard let image else {
+                Task { @MainActor in
+                    self.isRendering = false
+                    self.phaseLabel = ""
+                    self.errorMessage = "交接图生成失败"
+                }
+                return
+            }
+            let linear = GradeEngine.prepareSource(image)
+            let display = PreviewLUTService.displayImage(fromLinear: image)
+            let original = PreviewRenderer.cgImage(from: display)
+            Task { @MainActor in
+                self.source = linear
+                self.sourceReady = true
+                self.isRendering = false
+                self.phaseLabel = ""
+                self.previewAspect = CGFloat(image.width) / CGFloat(max(1, image.height))
+                if let original {
+                    self.originalImage = MImage.make(cgImage: original)
+                }
+                self.schedule(immediate: true)
+            }
+        }
+    }
+
+    func cancel() {
+        token += 1
+        exportToken += 1
+        pendingProxy?.cancel()
+        pendingSettle?.cancel()
+    }
+
+    // MARK: - 配方
+
+    func apply(_ ui: MGradeRecipe) {
+        displayRecipe = ui
+        schedule()
+    }
+
+    func setLUT(entry: GradeLUTEntry?) {
+        if let entry {
+            lutPath = entry.path
+            displayRecipe.lutName = entry.name
+            if displayRecipe.lutStrength <= 0 { displayRecipe.lutStrength = 60 }
+        } else {
+            lutPath = ""
+            displayRecipe.lutName = "无 LUT"
+            displayRecipe.lutStrength = 0
+        }
+        schedule()
+    }
+
+    func applyPreset(_ preset: GradePreset) {
+        let name = preset.recipe.lut.path.isEmpty
+            ? "无 LUT"
+            : (luts.first(where: { $0.path == preset.recipe.lut.path })?.name
+                ?? URL(fileURLWithPath: preset.recipe.lut.path).lastPathComponent)
+        lutPath = preset.recipe.lut.path
+        displayRecipe = MGradeRecipe(grade: preset.recipe, lutName: name)
+        schedule()
+    }
+
+    @discardableResult
+    func importLUT(url: URL) -> GradeLUTEntry? {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        guard let entry = try? GradePresetStore.shared.importLUT(from: url) else { return nil }
+        luts = GradePresetStore.shared.luts()
+        setLUT(entry: entry)
+        return entry
+    }
+
+    @discardableResult
+    func savePreset(name: String) -> GradePreset {
+        let preset = GradePresetStore.shared.save(
+            name: name, recipe: displayRecipe.gradeRecipe(lutPath: lutPath))
+        presets = GradePresetStore.shared.all
+        return preset
+    }
+
+    // MARK: - 渲染
+
+    private func schedule(immediate: Bool = false) {
+        guard sourceReady, !isExporting else { return }
+        pendingProxy?.cancel()
+        pendingSettle?.cancel()
+        if immediate {
+            render(edge: fullEdge)
+            return
+        }
+        if proxyInFlight { token += 1; proxyInFlight = false }
+        let proxy = DispatchWorkItem { [weak self] in
+            self?.pendingProxy = nil
+            self?.render(edge: self?.proxyEdge ?? 800)
+        }
+        pendingProxy = proxy
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: proxy)
+        let settle = DispatchWorkItem { [weak self] in
+            self?.pendingSettle = nil
+            self?.pendingProxy?.cancel()
+            self?.pendingProxy = nil
+            self?.render(edge: self?.fullEdge ?? 1600)
+        }
+        pendingSettle = settle
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.1, execute: settle)
+    }
+
+    private func render(edge: Int) {
+        guard let source else { return }
+        token += 1
+        activeFlag?.cancel()
+        let flag = MCancelFlag()
+        activeFlag = flag
+        let recipe = displayRecipe.gradeRecipe(lutPath: lutPath)
+        proxyInFlight = edge <= proxyEdge
+        isRendering = true
+        phaseLabel = edge <= proxyEdge ? "调色代理" : "调色精修"
+        phaseProgress = 0
+        gradeQueue.async { [weak self] in
+            let input = GradeEngine.downsampleLinear(source, maxLongEdge: edge)
+            do {
+                let result = try GradeEngine.render(
+                    input, recipe: recipe,
+                    shouldCancel: { flag.isCancelled })
+                let cgImage = PreviewRenderer.cgImage(from: result.image)
+                Task { @MainActor [weak self] in
+                    guard let self, self.activeFlag === flag, let cgImage else { return }
+                    self.previewImage = MImage.make(cgImage: cgImage)
+                    self.isRendering = false
+                    self.proxyInFlight = false
+                    self.phaseLabel = ""
+                    self.phaseProgress = 0
+                }
+            } catch {
+                Task { @MainActor [weak self] in
+                    guard let self, self.activeFlag === flag else { return }
+                    self.isRendering = false
+                    self.proxyInFlight = false
+                    self.phaseLabel = ""
+                }
+            }
+        }
+    }
+
+    // MARK: - 导出
+
+    func export(format: Int, longEdgeIndex: Int, completion: @escaping (Result<URL, Error>) -> Void) {
+        guard !isExporting, sourceReady else {
+            completion(.failure(MobileExportError.busy))
+            return
+        }
+        let originalEdge = max(store.photos.first(where: { $0.id == photoID })?.width ?? 0,
+                               store.photos.first(where: { $0.id == photoID })?.height ?? 0)
+        let edge = ExportEdge.resolve(index: longEdgeIndex, originalLongEdge: originalEdge)
+        let recipe = displayRecipe.gradeRecipe(lutPath: lutPath)
+        let targetSpace: String
+        let targetCCTF: Bool
+        let ext: String
+        let bitDepth: Int
+        switch format {
+        case 1:
+            targetSpace = "ProPhoto RGB"; targetCCTF = false; ext = "tif"; bitDepth = 16
+        case 2:
+            targetSpace = "ACES2065-1"; targetCCTF = false; ext = "exr"; bitDepth = 16
+        case 3:
+            targetSpace = "sRGB"; targetCCTF = true; ext = "jpg"; bitDepth = 8
+        default:
+            targetSpace = "sRGB"; targetCCTF = true; ext = "tif"; bitDepth = 16
+        }
+        let destination = Self.exportURL(filename: filename, ext: ext)
+        isExporting = true
+        exportToken += 1
+        let current = exportToken
+        phaseLabel = "导出调色"
+        phaseProgress = 0
+        develop.prepareHandoff(maxEdge: edge) { [weak self] image in
+            guard let self else { return }
+            guard let image else {
+                Task { @MainActor in
+                    self.isExporting = false
+                    self.phaseLabel = ""
+                    completion(.failure(MobileExportError.busy))
+                }
+                return
+            }
+            self.gradeQueue.async {
+                do {
+                    let linear = GradeEngine.prepareSource(image)
+                    let result = try GradeEngine.render(linear, recipe: recipe)
+                    let output = Self.convertForExport(
+                        result.image, colorSpace: targetSpace, cctfEncoding: targetCCTF)
+                    try FileManager.default.createDirectory(
+                        at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    try ImageExport.save(output, to: destination, bitDepth: bitDepth,
+                                         colorSpace: targetSpace, cctfEncoding: targetCCTF)
+                    Task { @MainActor in
+                        guard self.exportToken == current else { return }
+                        self.isExporting = false
+                        self.phaseLabel = ""
+                        self.phaseProgress = 0
+                        self.lastSavedURL = destination
+                        completion(.success(destination))
+                    }
+                } catch {
+                    Task { @MainActor in
+                        guard self.exportToken == current else { return }
+                        self.isExporting = false
+                        self.phaseLabel = ""
+                        self.phaseProgress = 0
+                        completion(.failure(error))
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - 工具
+
+    private nonisolated static func convertForExport(
+        _ image: ImageRGB, colorSpace: String, cctfEncoding: Bool
+    ) -> ImageRGB {
+        if colorSpace == "sRGB" && cctfEncoding { return image }
+        let sourceKind = ColorMath.cctfKind(for: "sRGB")
+        let targetKind = ColorMath.cctfKind(for: colorSpace)
+        return image.map { pixel in
+            let decoded = Vec3(
+                ColorMath.cctfDecode(pixel.x, kind: sourceKind),
+                ColorMath.cctfDecode(pixel.y, kind: sourceKind),
+                ColorMath.cctfDecode(pixel.z, kind: sourceKind)
+            )
+            let converted = ColorMath.rgbToRGB(decoded, from: "sRGB", to: colorSpace)
+            if cctfEncoding {
+                return Vec3(
+                    ColorMath.cctfEncode(converted.x, kind: targetKind),
+                    ColorMath.cctfEncode(converted.y, kind: targetKind),
+                    ColorMath.cctfEncode(converted.z, kind: targetKind)
+                )
+            }
+            return converted
+        }
+    }
+
+    private static func exportURL(filename: String, ext: String) -> URL {
+        let base = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Spektrafilm/Exports", isDirectory: true)
+        let stem = (filename as NSString).deletingPathExtension
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        return base.appendingPathComponent("\(stem)-\(formatter.string(from: Date())).\(ext)")
+    }
+}
+
+/// 跨线程取消标记：渲染在后台队列执行，主线程只负责置位。
+final class MCancelFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+
+    var isCancelled: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return cancelled
+    }
+
+    func cancel() {
+        lock.lock()
+        cancelled = true
+        lock.unlock()
+    }
+}

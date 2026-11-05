@@ -73,6 +73,9 @@ struct Hanatos2025Adaptation {
 }
 
 enum ProfileStore {
+    private static let cacheLock = NSLock()
+    private static var cache: [String: Profile] = [:]
+
     static func list() throws -> [String] {
         let dir = ResourceLocator.url("Profiles")
         let urls = try FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
@@ -83,6 +86,12 @@ enum ProfileStore {
     }
 
     static func load(_ stock: String) throws -> Profile {
+        cacheLock.lock()
+        if let cached = cache[stock] {
+            cacheLock.unlock()
+            return cached
+        }
+        cacheLock.unlock()
         let url = ResourceLocator.url("Profiles/\(stock).json")
         guard FileManager.default.fileExists(atPath: url.path) else {
             throw CoreError.missingResource("Profiles/\(stock).json")
@@ -93,7 +102,13 @@ enum ProfileStore {
             throw CoreError.invalidProfile(stock)
         }
         let metadata = root["metadata"] as? [String: Any] ?? [:]
-        return Profile(metadata: metadata, info: parseInfo(info, stock: stock), data: try parseData(data, stock: stock))
+        let profile = Profile(metadata: metadata,
+                              info: parseInfo(info, stock: stock),
+                              data: try parseData(data, stock: stock))
+        cacheLock.lock()
+        cache[stock] = profile
+        cacheLock.unlock()
+        return profile
     }
 
     private static func parseInfo(_ value: [String: Any], stock: String) -> ProfileInfo {

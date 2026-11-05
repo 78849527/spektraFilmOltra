@@ -42,6 +42,10 @@ enum ImageExport {
         case "png":
             try writeViaImageIO(image: image, to: url, ext: ext,
                                 colorSpace: colorSpace, metadata: metadata)
+        case "jpg", "jpeg":
+            // 导出侧支持 JPEG；导入侧仍按硬约束只收 RAW。
+            try writeViaImageIO(image: image, to: url, ext: "jpg",
+                                colorSpace: colorSpace, metadata: metadata)
         default:
             throw ExportError.unsupportedFormat(ext)
         }
