@@ -202,3 +202,5 @@ build-macos/
 electron/node_modules/
 electron/dist/
 electron/dist-electron/
+electron/release/
+electron/build/
