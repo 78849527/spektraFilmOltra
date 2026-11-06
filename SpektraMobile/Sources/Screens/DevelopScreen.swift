@@ -87,6 +87,7 @@ struct DevelopScreen: View {
                     exportOpen = false
                     onBack()
                 },
+                onNote: onToast,
                 onExport: { format, edge, done in
                     session.export(format: format, longEdgeIndex: edge) { result in
                         if case .failure = result { onToast("导出失败") }
@@ -1089,6 +1090,8 @@ struct MExportSheet: View {
     var canExport: Bool = true
     let onClose: () -> Void
     let onReturnHome: () -> Void
+    /// 相册写入是后台静默的，失败时用调用方的 toast 说明「文件已在 App 内」。
+    var onNote: (String) -> Void = { _ in }
     let onExport: (Int, Int, @escaping (Result<URL, Error>) -> Void) -> Void
 
     @State private var format = 0
@@ -1285,8 +1288,17 @@ struct MExportSheet: View {
         onExport(format, longEdge) { result in
             switch result {
             case .success(let url):
-                // 相册写入静默进行：成功与否都不再改变按钮，按钮直接变「返回主页」。
-                PhotoLibraryExport.save(url) { _ in }
+                // 相册写入静默进行：成功不打扰，失败/被拒时必须告诉用户文件还在 App 内。
+                PhotoLibraryExport.save(url) { outcome in
+                    switch outcome {
+                    case .saved:
+                        break
+                    case .denied:
+                        onNote("未授权相册 · 文件已导出到 App 内")
+                    case .failed:
+                        onNote("相册写入失败 · 文件已导出到 App 内")
+                    }
+                }
                 withAnimation(MMotion.state) { phase = .done }
             case .failure:
                 withAnimation(MMotion.state) { phase = .idle }

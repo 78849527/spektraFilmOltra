@@ -94,6 +94,7 @@ struct GradeScreen: View {
                     exportOpen = false
                     onGoHome()
                 },
+                onNote: onToast,
                 onExport: { format, edge, done in
                     session.export(format: format, longEdgeIndex: edge) { result in
                         if case .failure = result { onToast("导出失败") }
