@@ -216,9 +216,9 @@ enum ClarityAnalyzer {
         var dark = [Double](repeating: 0, count: count)
         for i in 0..<count {
             dark[i] = min(
-                small.data[i * 3],
-                small.data[i * 3 + 1],
-                small.data[i * 3 + 2]
+                Double(small.data[i * 3]),
+                Double(small.data[i * 3 + 1]),
+                Double(small.data[i * 3 + 2])
             )
         }
         let darkRadius = max(2, Int(round(7.0 * Double(sw) / Double(width))))
@@ -236,9 +236,9 @@ enum ClarityAnalyzer {
         candidateB.reserveCapacity(candidateCount * 2)
         for i in 0..<count {
             guard darkFiltered[i] >= threshold else { continue }
-            let r = small.data[i * 3]
-            let g = small.data[i * 3 + 1]
-            let b = small.data[i * 3 + 2]
+            let r = Double(small.data[i * 3])
+            let g = Double(small.data[i * 3 + 1])
+            let b = Double(small.data[i * 3 + 2])
             if r > 0.98 || g > 0.98 || b > 0.98 { continue }
             let lab = ClarityMath.oklab(fromLinear: Vec3(r, g, b))
             if lab.x > 0.90 { continue }
@@ -260,9 +260,9 @@ enum ClarityAnalyzer {
 
         var transmission = [Double](repeating: 1, count: count)
         for i in 0..<count {
-            let r = small.data[i * 3] / max(airlight.x, 1e-6)
-            let g = small.data[i * 3 + 1] / max(airlight.y, 1e-6)
-            let b = small.data[i * 3 + 2] / max(airlight.z, 1e-6)
+            let r = Double(small.data[i * 3]) / max(airlight.x, 1e-6)
+            let g = Double(small.data[i * 3 + 1]) / max(airlight.y, 1e-6)
+            let b = Double(small.data[i * 3 + 2]) / max(airlight.z, 1e-6)
             transmission[i] = ClarityMath.clamp(1 - 0.90 * min(r, g, b), 0.35, 1)
         }
         let guideRadius = max(3, Int(round(20.0 * Double(sw) / Double(width))))

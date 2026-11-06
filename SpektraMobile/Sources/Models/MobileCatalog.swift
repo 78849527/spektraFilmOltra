@@ -56,10 +56,12 @@ enum MobileCatalog {
             MQuickAxis(id: "color_density", label: "色彩浓度", group: "色彩",
                        range: -100...100, step: 1, decimals: 0, suffix: "", base: 0, value: 0),
             MQuickAxis(id: "temperature", label: "印相冷暖", group: "色彩",
-                       range: -100...100, step: 1, decimals: 0, suffix: " CC", base: 0, value: 0),
+                       range: -100...100, step: 1, decimals: 0, suffix: "", base: 0, value: 0),
         ]),
         MQuickGroup(id: "texture", title: "质感", axes: [
             MQuickAxis(id: "grain_amount", label: "颗粒强度", group: "质感",
+                       range: -100...100, step: 1, decimals: 0, suffix: "", base: 0, value: 0),
+            MQuickAxis(id: "grain_size", label: "颗粒尺寸", group: "质感",
                        range: -100...100, step: 1, decimals: 0, suffix: "", base: 0, value: 0),
             MQuickAxis(id: "scanner_clarity", label: "扫描清晰度", group: "质感",
                        range: -100...100, step: 1, decimals: 0, suffix: "", base: 0, value: 0),
@@ -73,42 +75,129 @@ enum MobileCatalog {
             MProGroup(id: "tone-camera", title: "拍摄", rows: [
                 slider("exposure_compensation_ev", "曝光补偿", 0, -5...5, 0.1, 1, " EV"),
                 toggle("auto_exposure", "自动曝光", true),
+                choice("auto_exposure_method", "测光方式", [
+                    MProOption(value: "center_weighted", label: "中央重点"),
+                    MProOption(value: "average", label: "平均值"),
+                    MProOption(value: "median", label: "中位数"),
+                    MProOption(value: "partial", label: "局部"),
+                    MProOption(value: "matrix", label: "矩阵"),
+                    MProOption(value: "multi_zone", label: "多区"),
+                    MProOption(value: "highlight_weighted", label: "高光优先"),
+                ], "center_weighted"),
+                slider("camera_lens_blur_um", "拍摄柔化", 0, 0...10, 0.1, 1, " µm"),
             ]),
             MProGroup(id: "tone-print", title: "印相", rows: [
-                slider("print_exposure", "印相曝光", 1, 0.125...8, 0.01, 2, "×"),
-                slider("gamma_factor", "影调反差", 1, 0.55...1.8, 0.01, 2, "×"),
-                slider("developer_exhaustion", "高光柔和", 0, 0...100, 1, 0, ""),
-                slider("gamma_factor_fast", "快层反差", 1, 0.5...1.8, 0.01, 2, "×"),
+                slider("print_exposure", "印相曝光", 1, 0.25...4, 0.01, 2, "×"),
+                toggle("print_exposure_compensation", "自动亮度补偿", true),
+                toggle("normalize_print_exposure", "曝光归一", true),
+                slider("film_density_curve_gamma", "明暗对比", 1, 0.5...1.8, 0.01, 2, "×"),
+                slider("gamma_factor", "影调反差", 1, 0.5...2.0, 0.01, 2, "×"),
+                slider("developer_exhaustion", "高光柔和", 0, 0...1, 0.01, 2, ""),
+                slider("gamma_factor_fast", "快层反差", 1, 0.5...2.0, 0.01, 2, "×"),
+                slider("gamma_factor_slow", "慢层反差", 1, 0.5...2.0, 0.01, 2, "×"),
+            ]),
+            MProGroup(id: "tone-preflash", title: "预闪", rows: [
+                slider("preflash_exposure", "预闪曝光", 0, 0...0.3, 0.005, 3, ""),
+                slider("preflash_y_filter_shift", "预闪冷暖", 0, -40...40, 1, 0, " CC"),
+                slider("preflash_m_filter_shift", "预闪品红", 0, -40...40, 1, 0, " CC"),
             ]),
         ]),
         MProPage(id: "color", title: "色彩", groups: [
             MProGroup(id: "color-balance", title: "印相滤色", rows: [
                 slider("print_y_filter_shift", "Y 偏移", 0, -60...60, 1, 0, " CC"),
                 slider("print_m_filter_shift", "M 偏移", 0, -60...60, 1, 0, " CC"),
+                choice("print_illuminant", "印相光源", [
+                    MProOption(value: "TH-KG3", label: "TH-KG3"),
+                    MProOption(value: "D50", label: "D50"),
+                    MProOption(value: "D55", label: "D55"),
+                    MProOption(value: "D65", label: "D65"),
+                    MProOption(value: "A", label: "A"),
+                    MProOption(value: "Kinoton 75P", label: "Kinoton 75P"),
+                ], "TH-KG3"),
             ]),
-            MProGroup(id: "color-couplers", title: "染料与色域", rows: [
-                slider("inhibition_interlayer", "层间抑制", 1, 0.5...1.5, 0.01, 2, ""),
-                slider("coupler_amount", "成色剂强度", 1, 0...2, 0.01, 2, ""),
+            MProGroup(id: "color-couplers", title: "浓度", rows: [
+                toggle("couplers_active", "启用成色剂", true),
+                slider("inhibition_interlayer", "颜色浓度", 1, 0.0...1.5, 0.01, 2, ""),
+                slider("inhibition_samelayer", "层次反差", 1, 0.0...1.5, 0.01, 2, ""),
+                slider("coupler_amount", "成色剂强度", 1, 0...1.5, 0.01, 2, ""),
+                slider("diffusion_size_um", "染色扩散", 20, 0...30, 1, 0, ""),
+            ]),
+            MProGroup(id: "color-split", title: "分色", rows: [
+                slider("gamma_factor_red", "红色反差", 1, 0.5...2.0, 0.01, 2, "×"),
+                slider("gamma_factor_green", "绿色反差", 1, 0.5...2.0, 0.01, 2, "×"),
+                slider("gamma_factor_blue", "蓝色反差", 1, 0.5...2.0, 0.01, 2, "×"),
+            ]),
+            MProGroup(id: "color-diffusion", title: "柔光镜", rows: [
+                toggle("camera_diffusion_active", "启用柔光", false),
+                slider("camera_diffusion_strength", "柔光强度", 0.5, 0...2, 0.01, 2, ""),
+                choice("camera_diffusion_family", "柔光类型", [
+                    MProOption(value: "black_pro_mist", label: "Black Pro-Mist"),
+                    MProOption(value: "glimmerglass", label: "Glimmerglass"),
+                    MProOption(value: "pro_mist", label: "Pro-Mist"),
+                    MProOption(value: "cinebloom", label: "CineBloom"),
+                ], "black_pro_mist"),
+                slider("camera_diffusion_spatial_scale", "柔光范围", 1, 0...3, 0.05, 2, "×"),
+                slider("camera_diffusion_halo_warmth", "光晕暖度", 0, -1.5...1.5, 0.05, 2, ""),
+            ]),
+            MProGroup(id: "color-enlarger-diffusion", title: "印相柔光", rows: [
+                toggle("enlarger_diffusion_active", "启用印相柔光", false),
+                slider("enlarger_diffusion_strength", "印相柔光强度", 0.5, 0...2, 0.01, 2, ""),
+                slider("enlarger_diffusion_spatial_scale", "印相柔光范围", 1, 0...3, 0.05, 2, "×"),
+            ]),
+            MProGroup(id: "color-glare", title: "印相眩光", rows: [
+                toggle("print_glare_active", "启用印相眩光", true),
+                slider("print_glare_percent", "眩光比例", 0.03, 0...1, 0.01, 2, ""),
+                slider("print_glare_roughness", "眩光粗糙", 0.7, 0...1, 0.01, 2, ""),
+                slider("print_glare_blur", "眩光模糊", 0.5, 0...2, 0.01, 2, " px"),
             ]),
         ]),
         MProPage(id: "film", title: "胶片", groups: [
             MProGroup(id: "film-format", title: "片基", rows: [
                 slider("film_format_mm", "胶片格式", 35, 8...120, 1, 0, " mm"),
-                slider("diffusion_size_um", "染料扩散", 20, 0...100, 1, 0, ""),
             ]),
-            MProGroup(id: "film-render", title: "光学", rows: [
-                slider("halation_amount", "光晕强度", 1, 0...3, 0.01, 2, ""),
-                slider("preflash_exposure", "预闪曝光", 0, 0...0.3, 0.01, 2, ""),
+            MProGroup(id: "film-grain", title: "颗粒", rows: [
+                toggle("grain_active", "启用颗粒", true),
+                toggle("grain_sublayers_active", "分层颗粒", true),
+                slider("particle_area_um2", "颗粒尺寸", 0.2, 0.02...0.8, 0.01, 2, " µm"),
+                slider("grain_density_min", "密度地板", 0.03, 0.005...0.08, 0.001, 3, ""),
+                slider("grain_uniformity", "颗粒均匀度", 0.97, 0.90...0.995, 0.001, 3, ""),
+                slider("grain_blur", "颗粒柔和", 0.65, 0...1.5, 0.01, 2, " px"),
+                slider("grain_dye_clouds", "染料云", 1, 0...2, 0.05, 2, " µm"),
+            ]),
+            MProGroup(id: "film-halation", title: "光晕", rows: [
+                toggle("halation_active", "启用光晕", true),
+                slider("halation_amount", "高光红晕", 1, 0...2, 0.01, 2, ""),
+                slider("halation_scatter_amount", "高光辉光", 1, 0...2, 0.01, 2, ""),
+                slider("halation_scatter_scale", "辉光范围", 1, 0...3, 0.05, 2, "×"),
+                slider("halation_spatial_scale", "红晕扩散", 1, 0...3, 0.05, 2, "×"),
+                slider("halation_boost_ev", "高光提亮", 0, 0...4, 0.1, 1, " EV"),
+                slider("halation_boost_range", "提亮范围", 0.3, 0...1, 0.01, 2, ""),
+                slider("halation_protect_ev", "高光保护", 4, 0...6, 0.1, 1, " EV"),
+                slider("halation_n_bounces", "反射次数", 3, 1...5, 1, 0, ""),
+                slider("halation_bounce_decay", "反射衰减", 0.5, 0...1, 0.01, 2, ""),
+                toggle("halation_renormalize", "光晕归一", true),
+            ]),
+            MProGroup(id: "film-glare", title: "胶片眩光", rows: [
+                toggle("film_glare_active", "启用胶片眩光", true),
+                slider("film_glare_percent", "眩光比例", 0.03, 0...1, 0.01, 2, ""),
+                slider("film_glare_roughness", "眩光粗糙", 0.7, 0...1, 0.01, 2, ""),
+                slider("film_glare_blur", "眩光模糊", 0.5, 0...2, 0.01, 2, " px"),
             ]),
         ]),
         MProPage(id: "detail", title: "细节", groups: [
             MProGroup(id: "detail-scan", title: "扫描", rows: [
+                slider("scanner_lens_blur", "镜头模糊", 0, 0...2, 0.01, 2, ""),
                 slider("scanner_unsharp_amount", "扫描锐化", 0.7, 0...2, 0.01, 2, ""),
                 slider("scanner_unsharp_sigma", "锐化半径", 0.7, 0...3, 0.01, 2, " px"),
             ]),
-            MProGroup(id: "detail-lens", title: "镜头", rows: [
-                slider("scanner_lens_blur", "镜头模糊", 0, 0...2, 0.01, 2, ""),
-                slider("particle_area_um2", "颗粒尺寸", 0.2, 0.03...1.2, 0.01, 2, " µm"),
+            MProGroup(id: "detail-levels", title: "黑白场", rows: [
+                toggle("white_correction", "白场校正", false),
+                slider("white_level", "白场", 0.98, 0.75...1.0, 0.005, 3, ""),
+                toggle("black_correction", "黑场校正", false),
+                slider("black_level", "黑场", 0.01, 0.001...0.08, 0.001, 3, ""),
+            ]),
+            MProGroup(id: "detail-film", title: "底片", rows: [
+                toggle("scan_film", "查看底片", false),
             ]),
         ]),
     ]
@@ -167,5 +256,10 @@ enum MobileCatalog {
 
     private static func toggle(_ id: String, _ label: String, _ on: Bool) -> MProRow {
         MProRow(id: id, label: label, control: .toggle(isOn: on))
+    }
+
+    private static func choice(_ id: String, _ label: String,
+                               _ options: [MProOption], _ value: String) -> MProRow {
+        MProRow(id: id, label: label, control: .choice(options: options, value: value))
     }
 }

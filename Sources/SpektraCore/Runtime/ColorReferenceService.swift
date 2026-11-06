@@ -46,8 +46,8 @@ final class ColorReferenceService {
             let cmyWhite = ImageRGB(width: 1, height: 1, data: [0, 0, 0])
             let blackXYZ = cmyToLogXYZ(cmyBlack)
             let whiteXYZ = cmyToLogXYZ(cmyWhite)
-            yBlack = pow(10, blackXYZ.data[1])
-            yWhite = pow(10, whiteXYZ.data[1])
+            yBlack = pow(10, Double(blackXYZ.data[1]))
+            yWhite = pow(10, Double(whiteXYZ.data[1]))
         } else if !scanFilm && printProfile.info.type == "negative" && inPrint {
             guard let logRawPrintBlack, let logRawPrintWhite else { return }
             let cmyBlack = DensityCurves.developSimple(
@@ -64,8 +64,8 @@ final class ColorReferenceService {
             )
             let blackXYZ = cmyToLogXYZ(cmyBlack)
             let whiteXYZ = cmyToLogXYZ(cmyWhite)
-            yBlack = pow(10, blackXYZ.data[1])
-            yWhite = pow(10, whiteXYZ.data[1])
+            yBlack = pow(10, Double(blackXYZ.data[1]))
+            yWhite = pow(10, Double(whiteXYZ.data[1]))
         }
     }
 
@@ -130,19 +130,29 @@ final class ColorReferenceService {
     }
 
     func blackWhiteXYZCorrection(_ xyz: ImageRGB) -> ImageRGB {
-        guard blackCorrection || whiteCorrection else { return xyz }
-        if scanFilm && film.info.type == "negative" { return xyz }
-        let (m, q, _) = correctionFunction()
         var output = xyz
-        for p in 0..<(xyz.width * xyz.height) {
-            let y = xyz.data[p * 3 + 1]
-            let corrected = min(max(m * y + q, 0), 1)
-            let scale = corrected / (y + 1e-10)
-            output.data[p * 3] = xyz.data[p * 3] * scale
-            output.data[p * 3 + 1] = corrected
-            output.data[p * 3 + 2] = xyz.data[p * 3 + 2] * scale
-        }
+        applyBlackWhiteXYZCorrection(&output)
         return output
+    }
+
+    /// 原地版本：调用方传入独占临时缓冲时用，省掉 293 MB 的 COW 拷贝。
+    /// 每个像素只读自己的 Y 再做通道缩放，写回同一位置是安全的。
+    func applyBlackWhiteXYZCorrection(_ xyz: inout ImageRGB) {
+        guard blackCorrection || whiteCorrection else { return }
+        if scanFilm && film.info.type == "negative" { return }
+        let (m, q, _) = correctionFunction()
+        let count = xyz.width * xyz.height
+        xyz.data.withUnsafeMutableBufferPointer { buffer in
+            guard let base = buffer.baseAddress else { return }
+            for p in 0..<count {
+                let y = Double(base[p * 3 + 1])
+                let corrected = min(max(m * y + q, 0), 1)
+                let scale = corrected / (y + 1e-10)
+                base[p * 3] = Float(Double(base[p * 3]) * scale)
+                base[p * 3 + 1] = Float(corrected)
+                base[p * 3 + 2] = Float(Double(base[p * 3 + 2]) * scale)
+            }
+        }
     }
 
     private func densityCurvesMax(_ curves: [[Double]]) -> [Double] {

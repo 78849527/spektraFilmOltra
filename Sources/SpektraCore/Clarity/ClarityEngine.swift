@@ -219,7 +219,8 @@ enum AdaptiveClarityEngine {
         var low = 0
         for i in 0..<count {
             let y = ClarityMath.luminance(
-                image.data[i * 3], image.data[i * 3 + 1], image.data[i * 3 + 2]
+                Double(image.data[i * 3]), Double(image.data[i * 3 + 1]),
+                Double(image.data[i * 3 + 2])
             )
             if y > 0.99 { high += 1 }
             if y < 0.001 { low += 1 }

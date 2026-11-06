@@ -12,7 +12,6 @@ struct DevelopScreen: View {
     @State private var mode = DebugLaunch.modePro ? 1 : 0
     @State private var page = DebugLaunch.developPage
     @State private var drawerHeight: CGFloat = DebugLaunch.developDrawer
-    @State private var dragStart: CGFloat? = nil
     @State private var panelContentHeight: CGFloat = 0
     @State private var panelViewportHeight: CGFloat = 0
     @State private var drawerChrome: CGFloat = 0
@@ -34,9 +33,11 @@ struct DevelopScreen: View {
     @State private var imageRevealed = false
 
     @Environment(\.mHousing) private var housingSetting
+    @Environment(\.mSafeInsets) private var insets
     private var housing: MHousingKind { MDeviceHousing.resolved(housingSetting) }
 
-    private let availableHeight: CGFloat = 852 - MMetric.safeTop - MMetric.safeBottom
+    /// 真实可用画布高度：由根视图注入的设备安全区算出，不再写死 852/54/34。
+    private var availableHeight: CGFloat { insets.contentHeight }
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -63,46 +64,45 @@ struct DevelopScreen: View {
                 }
                 Spacer(minLength: 0)
             }
-            .padding(.top, MMetric.safeTop)
+            .padding(.top, insets.top)
 
             drawer
-                .frame(height: drawerHeight + MMetric.safeBottom)
+                .frame(height: drawerHeight + insets.bottom)
 
             MBackSwipe(action: onBack)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-                .padding(.top, MMetric.safeTop)
-
-            if exportOpen {
-                MExportSheet(
-                    filename: session.filename,
-                    isExporting: session.isExporting,
-                    phaseLabel: session.phaseLabel,
-                    onClose: { withAnimation(MMotion.drawer) { exportOpen = false } },
-                    onReturnHome: {
-                        withAnimation(MMotion.drawer) { exportOpen = false }
-                        onBack()
-                    },
-                    onExport: { format, edge, done in
-                        session.export(format: format, longEdgeIndex: edge) { result in
-                            switch result {
-                            case .success:
-                                done(true)
-                            case .failure:
-                                done(false)
-                                onToast("导出失败")
-                            }
-                        }
-                    }
-                )
-            }
+                .padding(.top, insets.top)
         }
         .background(MColor.app)
+        .sheet(isPresented: $exportOpen) {
+            MExportSheet(
+                filename: session.filename,
+                isExporting: session.isExporting,
+                phaseLabel: session.exportLabel,
+                phaseProgress: session.isExporting ? session.exportProgress : nil,
+                originalLongEdge: session.exportOriginalEdge,
+                canExport: session.isLoaded,
+                onClose: { exportOpen = false },
+                onReturnHome: {
+                    exportOpen = false
+                    onBack()
+                },
+                onExport: { format, edge, done in
+                    session.export(format: format, longEdgeIndex: edge) { result in
+                        if case .failure = result { onToast("导出失败") }
+                        done(result)
+                    }
+                }
+            )
+        }
         .overlay(alignment: .top) {
             if housing != .none {
                 MHousingAura(
                     housing: housing,
                     isActive: session.isRendering,
-                    label: session.phaseLabel
+                    label: session.isRendering
+                        ? (session.phaseLabel.isEmpty ? "显影中" : session.phaseLabel)
+                        : ""
                 )
             }
         }
@@ -125,9 +125,10 @@ struct DevelopScreen: View {
             }
 
             Spacer(minLength: 0)
+            previewScaleMenu
         }
+        .frame(height: 34)
         .padding(.horizontal, 14)
-        .padding(.top, 10)
         .overlay(alignment: .center) {
             MModeCapsule(titles: ["快速", "专业"], mode: $mode)
                 .overlay { capsuleProgressRing }
@@ -136,23 +137,62 @@ struct DevelopScreen: View {
                 .animation(MMotion.drawer, value: session.isRendering)
                 .animation(MMotion.quick, value: session.phaseLabel)
         }
+        .padding(.top, 10)
     }
 
-    /// 没有刘海 / 灵动岛时，光效改套在「快速 / 专业」胶囊外圈，步骤文字落在胶囊下方。
+    /// 预览渲染比例菜单：1/8、1/4、1/2、1/1，与 Swift 主线的 previewScale 档位一致。
+    private var previewScaleMenu: some View {
+        Menu {
+            ForEach([0.125, 0.25, 0.5, 1.0], id: \.self) { value in
+                Button {
+                    MHaptic.tick()
+                    withAnimation(MMotion.state) { session.setPreviewScale(value) }
+                } label: {
+                    Text(previewScaleTitle(value))
+                }
+            }
+        } label: {
+            HStack(spacing: 3) {
+                Text(previewScaleTitle(session.previewScale))
+                    .font(.mSans(9, .medium).monospacedDigit())
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 7, weight: .semibold))
+            }
+            .foregroundStyle(MColor.text2)
+            .padding(.horizontal, 9)
+            .frame(height: 28)
+            .background(Capsule().fill(MColor.surface2.opacity(0.9)))
+            .overlay(Capsule().strokeBorder(MColor.hairline, lineWidth: 1))
+        }
+        .accessibilityLabel("预览渲染比例")
+        .accessibilityValue(previewScaleTitle(session.previewScale))
+    }
+
+    private func previewScaleTitle(_ value: Double) -> String {
+        switch value {
+        case ..<0.2: return "1/8"
+        case ..<0.4: return "1/4"
+        case ..<0.8: return "1/2"
+        default: return "1/1"
+        }
+    }
+
+    /// 没有刘海 / 灵动岛时，光效改套在「快速 / 专业」胶囊外圈；步骤文字统一落在胶囊下方，
+    /// 不再由开孔光效绘制（那会和胶囊重叠）。
     @ViewBuilder private var capsuleProgressRing: some View {
         if housing == .none {
             MGlowSweep(
                 shape: Capsule().inset(by: -4),
                 isActive: session.isRendering,
-                period: 2.4,
-                segment: 0.36,
+                period: 4.2,
                 coreWidth: 1.4
             )
         }
     }
 
     @ViewBuilder private var capsuleProgressText: some View {
-        if housing == .none, session.isRendering {
+        // 有开孔时文字归 MHousingAura 画在开孔下方；无开孔机型没有让位空间，才落在胶囊下方。
+        if session.isRendering, housing == .none {
             Text(session.phaseLabel.isEmpty ? "显影中" : session.phaseLabel)
                 .font(.mSans(9, .medium))
                 .foregroundStyle(MColor.brassHigh.opacity(0.92))
@@ -166,22 +206,13 @@ struct DevelopScreen: View {
 
     private var previewStage: some View {
         ZStack {
-            MColor.canvas
-
-            RadialGradient(
-                colors: [Color.white.opacity(0.035), .clear],
-                center: .center,
-                startRadius: 20,
-                endRadius: 300
-            )
-            .allowsHitTesting(false)
-
+            // 预览区不再铺自己的深色底：照片直接落在页面底色上，四周没有额外衬底，
+            // 放大时也不会出现一圈「背景层」读成蒙版。
             Group {
                 if let image = showOriginal ? session.originalImage : session.previewImage {
                     MImage.swiftUI(image)
                         .resizable()
                         .scaledToFit()
-                        .padding(.horizontal, 14)
                         .scaleEffect(zoom)
                         .offset(pan)
                         .animation(MMotion.state, value: showOriginal)
@@ -310,7 +341,7 @@ struct DevelopScreen: View {
                     .foregroundStyle(showOriginal ? MColor.text2 : MColor.text4)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
-                    .background(Capsule().fill(Color.black.opacity(0.42)))
+                    .mGlassSurface(Capsule(), fallbackFill: Color.black.opacity(0.42))
             }
         }
     }
@@ -344,12 +375,12 @@ struct DevelopScreen: View {
         .allowsHitTesting(false)
         .scaleEffect(zoom)
         .offset(pan)
+        .opacity(zoom > 1 ? 0 : 1)
     }
 
-    /// 与预览图 `.scaledToFit` + 左右 14pt 内边距的落点保持一致，取景角只贴着照片。
+    /// 与预览图 `.scaledToFit` 的落点保持一致（照片现在铺满预览区宽度），取景角只贴着照片。
     private func fittedPreviewRect(in size: CGSize) -> CGRect {
-        let horizontalInset: CGFloat = 14
-        let availableWidth = max(1, size.width - horizontalInset * 2)
+        let availableWidth = max(1, size.width)
         let availableHeight = max(1, size.height)
         let aspect = max(0.1, session.previewAspect)
         var width = availableWidth
@@ -382,53 +413,37 @@ struct DevelopScreen: View {
         withAnimation(.spring(response: 0.45, dampingFraction: 0.7)) {
             cardRect = fittedPreviewRect(in: stageSize)
             cardRadius = 2
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+        } completion: {
             withAnimation(.easeOut(duration: 0.32)) {
                 cardOpacity = 0
                 imageRevealed = true
+            } completion: {
+                cardVisible = false
             }
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.82) {
-            cardVisible = false
         }
     }
 
     private func cardStartRect() -> CGRect {
         let width = stageSize.width
-        switch housing {
-        case .notch:
-            let notchWidth = width * 0.432
-            let notchHeight = notchWidth * 0.241
-            return CGRect(
-                x: (width - notchWidth) / 2,
-                y: 1 - MMetric.safeTop,
-                width: notchWidth,
-                height: notchHeight
-            )
-        case .none:
-            return CGRect(x: (width - 90) / 2, y: -MMetric.safeTop, width: 90, height: 3)
-        default:
-            let islandWidth = width * 0.336
-            let islandHeight = islandWidth * 0.318
-            return CGRect(
-                x: (width - islandWidth) / 2,
-                y: width * 0.0178 - MMetric.safeTop,
-                width: islandWidth,
-                height: islandHeight
-            )
-        }
+        var stageInsets = insets
+        stageInsets.size.width = width
+        let opening = MDeviceHousing.opening(kind: housing, insets: stageInsets)
+        // 预览画布自身已经从安全区顶部开始，所以减去 insets.top 才是画布内坐标。
+        return CGRect(
+            x: opening.minX,
+            y: opening.minY - insets.top,
+            width: opening.width,
+            height: opening.height
+        )
     }
 
     // MARK: - 抽屉
 
     private var drawer: some View {
         VStack(spacing: 0) {
-            MGrabber(compact: true)
-                .contentShape(Rectangle())
-                .gesture(drawerDrag)
-                .accessibilityElement()
-                .accessibilityLabel("抽屉把手")
+            MDrawerChevron(isExpanded: isDrawerExpanded, isVisible: !isLockedTab) {
+                toggleDrawer()
+            }
 
             ZStack {
                 pageContent
@@ -501,12 +516,19 @@ struct DevelopScreen: View {
     private func syncDrawerToContent() {
         guard panelViewportHeight > 0, panelContentHeight > 0 else { return }
         let fit = fitHeight(for: panelContentHeight)
+        let target: CGFloat
         if isLockedTab {
-            if abs(drawerHeight - fit) > 1 {
-                withAnimation(MMotion.drawer) { drawerHeight = fit }
-            }
-        } else if drawerHeight > fit {
-            withAnimation(MMotion.drawer) { drawerHeight = fit }
+            target = fit
+        } else {
+            target = min(drawerHeight, fit)
+        }
+        guard abs(drawerHeight - target) > 1 else { return }
+        // 在布局回调里只做赋值，不再启动动画：preference → 动画 → 布局 → preference 会形成反馈环。
+        drawerHeight = target
+        if DebugLaunch.probeGeometry {
+            NSLog("MDrawer content=%.0f viewport=%.0f fit=%.0f min=%.0f locked=%d height=%.0f",
+                  panelContentHeight, panelViewportHeight, fit, MMetric.drawerMin,
+                  isLockedTab ? 1 : 0, target)
         }
     }
 
@@ -523,34 +545,31 @@ struct DevelopScreen: View {
 
     private var fitDrawerHeight: CGFloat { fitHeight(for: panelContentHeight) }
 
-    /// 内容只比一档多出一点点，展开也没有更多东西可看：只保留一个档位。
+    /// 二档判据：内容比「一档时能看到的视口」还高 → 展开有意义 → 显示 chevron。
+    /// 以前用「fit 比一档高 120pt」，导致绝大多数调参页都被判成单档，箭头永远不出现。
     private var isLockedTab: Bool {
-        guard panelContentHeight > 0, panelViewportHeight > 0 else { return false }
-        return fitDrawerHeight - MMetric.drawerMin <= 120
+        guard panelContentHeight > 0 else { return true }
+        let collapsedViewport = MMetric.drawerMin - chromeHeight - 4
+        return panelContentHeight <= collapsedViewport + 24
     }
 
     private var minDrawerHeight: CGFloat {
         isLockedTab ? fitDrawerHeight : MMetric.drawerMin
     }
 
-    private var drawerDrag: some Gesture {
-        DragGesture(minimumDistance: 2)
-            .onChanged { gesture in
-                if dragStart == nil { dragStart = drawerHeight }
-                let base = dragStart ?? drawerHeight
-                drawerHeight = min(fitDrawerHeight, max(minDrawerHeight, base - gesture.translation.height))
-            }
-            .onEnded { gesture in
-                let base = dragStart ?? drawerHeight
-                let projected = base - gesture.predictedEndTranslation.height
-                let fit = fitDrawerHeight
-                let detents: [CGFloat] = isLockedTab
-                    ? [fit]
-                    : [MMetric.drawerMin, fit]
-                let target = detents.min { abs($0 - projected) < abs($1 - projected) } ?? MMetric.drawerMin
-                withAnimation(MMotion.drawer) { drawerHeight = target }
-                dragStart = nil
-            }
+    /// 二档是否已展开（只差 1pt 以内视为同档）。
+    private var isDrawerExpanded: Bool {
+        drawerHeight > minDrawerHeight + 1
+    }
+
+    /// 点击 chevron：在「一档」与「刚好容纳当前页内容」之间切换。
+    /// 用带轻微回弹的 spring，而非线性计时；iOS 26 上系统 chevron 的按压反馈由 Button 自带。
+    private func toggleDrawer() {
+        guard !isLockedTab else { return }
+        let target = isDrawerExpanded ? minDrawerHeight : fitDrawerHeight
+        withAnimation(.spring(response: 0.42, dampingFraction: 0.78)) {
+            drawerHeight = target
+        }
     }
 
     // MARK: - 分页
@@ -726,6 +745,7 @@ struct DevelopScreen: View {
                     HStack(alignment: .top, spacing: 12) {
                         VStack(alignment: .leading, spacing: 0) {
                             quickSlider("grain_amount")
+                            quickSlider("grain_size")
                             quickSlider("scanner_clarity")
                             Spacer(minLength: 0)
                         }
@@ -810,15 +830,33 @@ struct DevelopScreen: View {
                     ),
                     compact: true
                 )
-            case .choice(let text):
+            case .choice(let options, let fallback):
+                let current = session.choiceValue(row.id)
+                let currentLabel = options.first(where: { $0.value == current })?.label ?? fallback
                 HStack {
                     Text(row.label)
                         .font(.rowLabel)
                         .foregroundStyle(MColor.text2)
                     Spacer()
-                    Text(text)
-                        .font(.mSans(10.5, .medium))
-                        .foregroundStyle(MColor.text2)
+                    Menu {
+                        ForEach(options, id: \.value) { option in
+                            Button {
+                                MHaptic.tick()
+                                session.applyProChoice(row.id, option.value)
+                            } label: {
+                                Text(option.label)
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text(currentLabel)
+                                .font(.mSans(10.5, .medium))
+                                .foregroundStyle(current == fallback ? MColor.text2 : MColor.brass)
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 7, weight: .semibold))
+                                .foregroundStyle(MColor.text4)
+                        }
+                    }
                 }
                 .frame(height: 50)
             }
@@ -902,7 +940,7 @@ struct DevelopScreen: View {
                                             showOriginal ? session.originalImage : session.previewImage,
                                             CGRect(
                                                 x: rect.minX,
-                                                y: MMetric.safeTop + rect.minY,
+                                                y: insets.top + rect.minY,
                                                 width: rect.width,
                                                 height: rect.height
                                             )
@@ -922,7 +960,7 @@ struct DevelopScreen: View {
             }
         }
         .padding(.horizontal, 8)
-        .padding(.bottom, MMetric.safeBottom)
+        .padding(.bottom, insets.bottom)
         .background(MColor.surface1)
         .overlay(alignment: .top) { MHairline() }
     }
@@ -1043,18 +1081,27 @@ struct MExportSheet: View {
     let filename: String
     let isExporting: Bool
     let phaseLabel: String
+    /// 0…1 的导出进度；只有在调用方发布进度时才传，否则退回转圈。
+    var phaseProgress: Double? = nil
+    /// 原图真实长边，用于把「原始」档显示成「原始 4032」，避免用户猜导出尺寸。
+    var originalLongEdge: Int = 0
+    /// 原片还没读完时不能导出：`session.export` 会以 `.busy` 立刻失败，面板会闪回 idle。
+    var canExport: Bool = true
     let onClose: () -> Void
     let onReturnHome: () -> Void
-    let onExport: (Int, Int, @escaping (Bool) -> Void) -> Void
+    let onExport: (Int, Int, @escaping (Result<URL, Error>) -> Void) -> Void
 
     @State private var format = 0
-    @State private var longEdge = 1
+    /// 默认导出必须是原图全分辨率；2048/4096 只在用户主动选择时才缩小。
+    @State private var longEdge = 0
     @State private var phase: MExportPhase = .idle
+    /// 由内容实测高度决定 sheet 高度：只保留一档，不再上拉。
+    @State private var contentHeight: CGFloat = 420
+    @Environment(\.mSafeInsets) private var insets
 
     private enum MExportPhase {
         case idle
         case exporting
-        case success
         case done
     }
 
@@ -1067,16 +1114,8 @@ struct MExportSheet: View {
     private let edges = ["原始", "2048", "4096"]
 
     var body: some View {
-        ZStack(alignment: .bottom) {
-            MColor.scrim
-                .ignoresSafeArea()
-                .transition(.opacity)
-                .onTapGesture(perform: onClose)
-
-            VStack(spacing: 0) {
-                MGrabber()
-
-                HStack {
+        VStack(spacing: 0) {
+            HStack {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("导出")
                             .font(.mSerif(20))
@@ -1126,6 +1165,7 @@ struct MExportSheet: View {
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        .accessibilityAddTraits(format == item.offset ? [.isSelected] : [])
                     }
 
                     MSectionHead(title: "长边", trailing: "像素")
@@ -1138,7 +1178,7 @@ struct MExportSheet: View {
                                 MHaptic.tick()
                                 withAnimation(MMotion.state) { longEdge = item.offset }
                             } label: {
-                                Text(item.element)
+                                Text(edgeTitle(item.offset))
                                     .font(.mSans(10.5, .medium).monospacedDigit())
                                     .foregroundStyle(longEdge == item.offset ? MColor.brass : MColor.text3)
                                     .padding(.horizontal, 14)
@@ -1154,6 +1194,7 @@ struct MExportSheet: View {
                                     )
                             }
                             .buttonStyle(.plain)
+                            .accessibilityAddTraits(longEdge == item.offset ? [.isSelected] : [])
                         }
                         Spacer()
                     }
@@ -1163,31 +1204,33 @@ struct MExportSheet: View {
                 actionButton
                     .padding(.horizontal, MMetric.pageMargin)
                     .padding(.top, 16)
-                    .padding(.bottom, MMetric.safeBottom + 8)
-            }
-            .background(MColor.surface1)
-            .clipShape(
-                UnevenRoundedRectangle(
-                    topLeadingRadius: MRadius.sheet,
-                    bottomLeadingRadius: 0,
-                    bottomTrailingRadius: 0,
-                    topTrailingRadius: MRadius.sheet,
-                    style: .continuous
-                )
-            )
-            .overlay(alignment: .top) {
-                UnevenRoundedRectangle(
-                    topLeadingRadius: MRadius.sheet,
-                    bottomLeadingRadius: 0,
-                    bottomTrailingRadius: 0,
-                    topTrailingRadius: MRadius.sheet,
-                    style: .continuous
-                )
-                .strokeBorder(MColor.hairlineStrong, lineWidth: 1)
-            }
-            .transition(.move(edge: .bottom))
+                    .padding(.bottom, insets.bottom + 8)
         }
-        .ignoresSafeArea()
+        .background(MColor.surface1)
+        .background(
+            GeometryReader { proxy in
+                Color.clear
+                    .onAppear { contentHeight = proxy.size.height }
+                    .onChange(of: proxy.size.height) { _, height in contentHeight = height }
+            }
+        )
+        // 内容本身已含底部安全区 padding，这里只留一点上边距，避免面板底部出现一大块空白。
+        .presentationDetents([.height(min(640, max(340, contentHeight + 12)))])
+        .presentationDragIndicator(.visible)
+        .presentationCornerRadius(MRadius.sheet)
+        .presentationBackground(MColor.surface1)
+        .onChange(of: format) { _, _ in resetPhaseAfterOptionChange() }
+        .onChange(of: longEdge) { _, _ in resetPhaseAfterOptionChange() }
+        // 截图验收：等原片读完再自动开跑导出（原片没读完时 export 会以 .busy 立刻失败）
+        .onChange(of: canExport) { _, ready in
+            guard ready, DebugLaunch.exportAutoStart, phase == .idle else { return }
+            beginExport()
+        }
+        .task {
+            guard canExport, DebugLaunch.exportAutoStart, phase == .idle else { return }
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            if phase == .idle { beginExport() }
+        }
     }
 
     @ViewBuilder
@@ -1195,29 +1238,21 @@ struct MExportSheet: View {
         switch phase {
         case .idle:
             MBrassPill(
-                title: "导出 \(formats[format].title)",
-                icon: "square.and.arrow.up",
+                title: canExport ? "导出 \(formats[format].title)" : "正在读取原片",
+                icon: canExport ? "square.and.arrow.up" : nil,
                 height: 46,
-                fullWidth: true
+                fullWidth: true,
+                disabled: !canExport
             ) {
                 beginExport()
             }
         case .exporting:
-            MBrassPill(
-                title: phaseLabel.isEmpty ? "导出中" : phaseLabel,
-                height: 46,
-                fullWidth: true,
-                disabled: true,
-                loading: true
-            ) {}
-        case .success:
-            MBrassPill(
-                title: "导出成功",
-                icon: "checkmark",
-                height: 46,
-                fullWidth: true,
-                disabled: true
-            ) {}
+            if let phaseProgress {
+                MExportProgressRow(label: phaseLabel, progress: phaseProgress, height: 46)
+            } else {
+                MBrassPill(title: phaseLabel.isEmpty ? "导出中" : phaseLabel,
+                           height: 46, fullWidth: true, disabled: true, loading: true) {}
+            }
         case .done:
             MBrassPill(
                 title: "返回主页",
@@ -1230,19 +1265,30 @@ struct MExportSheet: View {
         }
     }
 
+    /// 导出完成后再改格式/长边：按钮回到「导出」，避免用户以为已经按新参数导过。
+    private func resetPhaseAfterOptionChange() {
+        guard phase == .done else { return }
+        withAnimation(MMotion.state) { phase = .idle }
+    }
+
+    private func edgeTitle(_ index: Int) -> String {
+        if index == 0, originalLongEdge > 0 {
+            return "原始 \(originalLongEdge)"
+        }
+        return index >= 0 && index < edges.count ? edges[index] : "原始"
+    }
+
     private func beginExport() {
         guard phase == .idle else { return }
         MHaptic.medium()
         phase = .exporting
-        onExport(format, longEdge) { ok in
-            if ok {
-                phase = .success
-                DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                    if phase == .success {
-                        withAnimation(MMotion.state) { phase = .done }
-                    }
-                }
-            } else {
+        onExport(format, longEdge) { result in
+            switch result {
+            case .success(let url):
+                // 相册写入静默进行：成功与否都不再改变按钮，按钮直接变「返回主页」。
+                PhotoLibraryExport.save(url) { _ in }
+                withAnimation(MMotion.state) { phase = .done }
+            case .failure:
                 withAnimation(MMotion.state) { phase = .idle }
             }
         }

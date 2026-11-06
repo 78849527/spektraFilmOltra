@@ -89,27 +89,30 @@ enum Couplers {
         var correction = ImageRGB(width: densityCMY.width, height: densityCMY.height)
         for p in 0..<pixelCount {
             let base = p * 3
-            let d0 = densityCMY.data[base]
-            let d1 = densityCMY.data[base + 1]
-            let d2 = densityCMY.data[base + 2]
+            let d0 = Double(densityCMY.data[base])
+            let d1 = Double(densityCMY.data[base + 1])
+            let d2 = Double(densityCMY.data[base + 2])
             let s0 = positive ? densityMax[0] - d0 : d0
             let s1 = positive ? densityMax[1] - d1 : d1
             let s2 = positive ? densityMax[2] - d2 : d2
             for m in 0..<3 {
-                correction.data[base + m] = s0 * matrix[0][m] + s1 * matrix[1][m] + s2 * matrix[2][m]
+                let value = s0 * matrix[0][m] + s1 * matrix[1][m] + s2 * matrix[2][m]
+                correction.data[base + m] = Float(value)
             }
         }
         if diffusionSizePixel > 0 {
             let gaussian = FastGaussian.filter(correction, sigma: diffusionSizePixel)
             let tail = FastGaussian.exponentialFilter(correction, decay: diffusionTailPixel, nGaussians: 3)
             for i in 0..<correction.data.count {
-                correction.data[i] = (1 - diffusionTailWeight) * gaussian.data[i]
-                    + diffusionTailWeight * tail.data[i]
+                let gaussianValue = Double(gaussian.data[i])
+                let tailValue = Double(tail.data[i])
+                correction.data[i] = Float((1 - diffusionTailWeight) * gaussianValue
+                    + diffusionTailWeight * tailValue)
             }
         }
         var output = logRaw
         for i in 0..<output.data.count {
-            output.data[i] = logRaw.data[i] - correction.data[i]
+            output.data[i] = Float(Double(logRaw.data[i]) - Double(correction.data[i]))
         }
         return output
     }

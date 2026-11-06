@@ -40,23 +40,69 @@ enum FastGaussian {
         if sigma >= smallSigmaMax { return iirFilter(input, width: width, height: height, sigma: sigma) }
         let (kernel, radius) = self.kernel(sigma: sigma, truncate: truncate)
         var temporary = [Double](repeating: 0, count: input.count)
-        for y in 0..<height {
-            for x in 0..<width {
-                var sum = 0.0
-                for k in -radius...radius {
-                    sum += input[reflect(y + k, height) * width + x] * kernel[k + radius]
+        var output = [Double](repeating: 0, count: input.count)
+        let diameter = 2 * radius + 1
+
+        // 垂直：把每一行的 2r+1 个反射行号在行外算好，内层循环不再调用 reflect。
+        input.withUnsafeBufferPointer { src in
+            temporary.withUnsafeMutableBufferPointer { tmp in
+                kernel.withUnsafeBufferPointer { k in
+                    func row(_ y: Int) {
+                        var rows = [Int](repeating: 0, count: diameter)
+                        for t in 0..<diameter { rows[t] = reflect(y + t - radius, height) }
+                        let base = y * width
+                        for x in 0..<width {
+                            var sum = 0.0
+                            for t in 0..<diameter {
+                                sum += src[rows[t] * width + x] * k[t]
+                            }
+                            tmp[base + x] = sum
+                        }
+                    }
+                    Interpolation.parallelRows(height: height, pixels: width * height, row)
                 }
-                temporary[y * width + x] = sum
             }
         }
-        var output = [Double](repeating: 0, count: input.count)
-        for y in 0..<height {
-            for x in 0..<width {
-                var sum = 0.0
-                for k in -radius...radius {
-                    sum += temporary[y * width + reflect(x + k, width)] * kernel[k + radius]
+
+        // 水平：中间区段没有反射，拆成「内部 + 左右边缘」三段。
+        temporary.withUnsafeBufferPointer { tmp in
+            output.withUnsafeMutableBufferPointer { out in
+                kernel.withUnsafeBufferPointer { k in
+                    func row(_ y: Int) {
+                        let base = y * width
+                        if width > 2 * radius {
+                            for x in radius..<(width - radius) {
+                                var sum = 0.0
+                                let start = base + x - radius
+                                for t in 0..<diameter { sum += tmp[start + t] * k[t] }
+                                out[base + x] = sum
+                            }
+                            for x in 0..<radius {
+                                var sum = 0.0
+                                for t in 0..<diameter {
+                                    sum += tmp[base + reflect(x - radius + t, width)] * k[t]
+                                }
+                                out[base + x] = sum
+                            }
+                            for x in (width - radius)..<width {
+                                var sum = 0.0
+                                for t in 0..<diameter {
+                                    sum += tmp[base + reflect(x - radius + t, width)] * k[t]
+                                }
+                                out[base + x] = sum
+                            }
+                        } else {
+                            for x in 0..<width {
+                                var sum = 0.0
+                                for t in 0..<diameter {
+                                    sum += tmp[base + reflect(x - radius + t, width)] * k[t]
+                                }
+                                out[base + x] = sum
+                            }
+                        }
+                    }
+                    Interpolation.parallelRows(height: height, pixels: width * height, row)
                 }
-                output[y * width + x] = sum
             }
         }
         return output
@@ -83,51 +129,69 @@ enum FastGaussian {
         guard sigma >= 0.5 else {
             return filterChannel(input, width: width, height: height, sigma: sigma, truncate: 3.0)
         }
+        guard width > 0, height > 0 else { return input }
         let (B, B1, B2, B3) = iirCoefficients(sigma)
         var temporary = [Double](repeating: 0, count: input.count)
-        for y in 0..<height {
-            var w1 = input[y * width]
-            var w2 = w1
-            var w3 = w1
-            for x in 0..<width {
-                let w = B * input[y * width + x] + B1 * w1 + B2 * w2 + B3 * w3
-                temporary[y * width + x] = w
-                w3 = w2
-                w2 = w1
-                w1 = w
-            }
-            var y1 = temporary[y * width + width - 1]
-            var y2 = y1
-            var y3 = y1
-            for x in stride(from: width - 1, through: 0, by: -1) {
-                let value = B * temporary[y * width + x] + B1 * y1 + B2 * y2 + B3 * y3
-                temporary[y * width + x] = value
-                y3 = y2
-                y2 = y1
-                y1 = value
+        var output = [Double](repeating: 0, count: input.count)
+
+        // 横向递归：每行独立，可按行并行。
+        input.withUnsafeBufferPointer { src in
+            temporary.withUnsafeMutableBufferPointer { tmp in
+                func row(_ y: Int) {
+                    let base = y * width
+                    var w1 = src[base]
+                    var w2 = w1
+                    var w3 = w1
+                    for x in 0..<width {
+                        let w = B * src[base + x] + B1 * w1 + B2 * w2 + B3 * w3
+                        tmp[base + x] = w
+                        w3 = w2
+                        w2 = w1
+                        w1 = w
+                    }
+                    var y1 = tmp[base + width - 1]
+                    var y2 = y1
+                    var y3 = y1
+                    for x in stride(from: width - 1, through: 0, by: -1) {
+                        let value = B * tmp[base + x] + B1 * y1 + B2 * y2 + B3 * y3
+                        tmp[base + x] = value
+                        y3 = y2
+                        y2 = y1
+                        y1 = value
+                    }
+                }
+                Interpolation.parallelRows(height: height, pixels: width * height, row)
             }
         }
-        var output = [Double](repeating: 0, count: input.count)
-        for x in 0..<width {
-            var w1 = temporary[x]
-            var w2 = w1
-            var w3 = w1
-            for y in 0..<height {
-                let w = B * temporary[y * width + x] + B1 * w1 + B2 * w2 + B3 * w3
-                output[y * width + x] = w
-                w3 = w2
-                w2 = w1
-                w1 = w
-            }
-            var y1 = output[(height - 1) * width + x]
-            var y2 = y1
-            var y3 = y1
-            for y in stride(from: height - 1, through: 0, by: -1) {
-                let value = B * output[y * width + x] + B1 * y1 + B2 * y2 + B3 * y3
-                output[y * width + x] = value
-                y3 = y2
-                y2 = y1
-                y1 = value
+
+        // 纵向递归：每列独立，可按列并行（不同列写不同下标，无竞争）。
+        temporary.withUnsafeBufferPointer { tmp in
+            output.withUnsafeMutableBufferPointer { out in
+                func column(_ x: Int) {
+                    var w1 = tmp[x]
+                    var w2 = w1
+                    var w3 = w1
+                    for y in 0..<height {
+                        let index = y * width + x
+                        let w = B * tmp[index] + B1 * w1 + B2 * w2 + B3 * w3
+                        out[index] = w
+                        w3 = w2
+                        w2 = w1
+                        w1 = w
+                    }
+                    var y1 = out[(height - 1) * width + x]
+                    var y2 = y1
+                    var y3 = y1
+                    for y in stride(from: height - 1, through: 0, by: -1) {
+                        let index = y * width + x
+                        let value = B * out[index] + B1 * y1 + B2 * y2 + B3 * y3
+                        out[index] = value
+                        y3 = y2
+                        y2 = y1
+                        y1 = value
+                    }
+                }
+                Interpolation.parallelRows(height: width, pixels: width * height, column)
             }
         }
         return output
@@ -137,10 +201,10 @@ enum FastGaussian {
         var output = image
         for c in 0..<3 {
             var channel = [Double](repeating: 0, count: image.width * image.height)
-            for i in 0..<channel.count { channel[i] = image.data[i * 3 + c] }
+            for i in 0..<channel.count { channel[i] = Double(image.data[i * 3 + c]) }
             let filtered = filterChannel(channel, width: image.width, height: image.height,
                                          sigma: sigma[c], truncate: truncate)
-            for i in 0..<filtered.count { output.data[i * 3 + c] = filtered[i] }
+            for i in 0..<filtered.count { output.data[i * 3 + c] = Float(filtered[i]) }
         }
         return output
     }
@@ -156,7 +220,7 @@ enum FastGaussian {
             let component = filter(image, sigma: decay.map { $0 * fit.1 })
             for c in 0..<3 {
                 for i in 0..<(image.width * image.height) {
-                    let value = fit.0 * component.data[i * 3 + c]
+                    let value = Float(fit.0 * Double(component.data[i * 3 + c]))
                     if index == 0 { result.data[i * 3 + c] = value }
                     else { result.data[i * 3 + c] += value }
                 }

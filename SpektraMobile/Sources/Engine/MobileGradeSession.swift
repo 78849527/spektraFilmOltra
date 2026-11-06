@@ -17,12 +17,16 @@ final class MobileGradeSession: ObservableObject {
     @Published private(set) var isRendering = false
     @Published private(set) var phaseLabel = ""
     @Published private(set) var phaseProgress: Double = 0
+    /// 导出独立文案，避免被「调色代理 / 调色精修」这类预览阶段覆盖。
+    @Published private(set) var exportLabel = ""
     @Published private(set) var errorMessage: String?
     @Published private(set) var presets: [GradePreset] = []
     @Published private(set) var luts: [GradeLUTEntry] = []
     @Published private(set) var isExporting = false
     @Published private(set) var lastSavedURL: URL?
     @Published private(set) var previewAspect: CGFloat = 4.0 / 3.0
+    /// 调色台预览比例（相对 1600 交接图）：1/8、1/4、1/2、1/1。
+    @Published private(set) var previewScale: Double
 
     private let gradeQueue = DispatchQueue(label: "spektra.mobile.grade", qos: .userInitiated)
     private var source: ImageRGB?
@@ -35,14 +39,24 @@ final class MobileGradeSession: ObservableObject {
     private var pendingSettle: DispatchWorkItem?
     private var proxyInFlight = false
 
-    private let proxyEdge = 800
-    private let fullEdge = 1600
+    /// 交接图固定 1600 长边；预览比例只决定从交接图降采样的代理/精修尺寸。
+    private let sourceEdge = 1600
+    private var fullEdge: Int {
+        max(160, Int(Double(sourceEdge) * previewScale))
+    }
+    /// 拖动期代理图：最多 1080，已覆盖 430pt@3x 屏幕的显示需求。
+    private var proxyEdge: Int {
+        max(160, min(1080, fullEdge))
+    }
+    private static let previewScaleKey = "mobile.grade.previewScale"
 
     init(photo: LibraryPhoto, store: LibraryStore, develop: MobileDevelopSession) {
         self.photoID = photo.id
         self.filename = photo.filename
         self.store = store
         self.develop = develop
+        let saved = UserDefaults.standard.double(forKey: Self.previewScaleKey)
+        self.previewScale = saved >= 0.125 && saved <= 1.0 ? saved : 1.0
         self.presets = GradePresetStore.shared.all
         self.luts = GradePresetStore.shared.luts()
     }
@@ -53,7 +67,7 @@ final class MobileGradeSession: ObservableObject {
         isRendering = true
         phaseLabel = "生成交接图"
         phaseProgress = 0
-        develop.prepareHandoff(maxEdge: fullEdge) { [weak self] image in
+        develop.prepareHandoff(maxEdge: sourceEdge) { [weak self] image in
             guard let self else { return }
             guard let image else {
                 Task { @MainActor in
@@ -64,7 +78,9 @@ final class MobileGradeSession: ObservableObject {
                 return
             }
             let linear = GradeEngine.prepareSource(image)
-            let display = PreviewLUTService.displayImage(fromLinear: image)
+            // 交接图是线性 ProPhoto；对比原图必须先转成线性 sRGB 再显示编码，
+            // 否则会把 ProPhoto 当成 sRGB 直接编码，出现明显偏色。
+            let display = PreviewLUTService.displayImage(fromLinear: linear)
             let original = PreviewRenderer.cgImage(from: display)
             Task { @MainActor in
                 self.source = linear
@@ -85,6 +101,22 @@ final class MobileGradeSession: ObservableObject {
         exportToken += 1
         pendingProxy?.cancel()
         pendingSettle?.cancel()
+    }
+
+    /// 导出面板显示用：原图真实长边。
+    var exportOriginalEdge: Int {
+        let photo = store.photos.first(where: { $0.id == photoID })
+        return max(photo?.width ?? 0, photo?.height ?? 0)
+    }
+
+    /// 调色台预览比例：只改变从 1600 交接图降采样的尺寸，不影响导出与配方。
+    func setPreviewScale(_ scale: Double) {
+        let value = min(max(scale, 0.125), 1.0)
+        guard abs(value - previewScale) > 1e-9 else { return }
+        previewScale = value
+        UserDefaults.standard.set(value, forKey: Self.previewScaleKey)
+        guard sourceReady, !isExporting else { return }
+        schedule(immediate: true)
     }
 
     // MARK: - 配方
@@ -229,13 +261,14 @@ final class MobileGradeSession: ObservableObject {
         exportToken += 1
         let current = exportToken
         phaseLabel = "导出调色"
+        exportLabel = "导出调色"
         phaseProgress = 0
         develop.prepareHandoff(maxEdge: edge) { [weak self] image in
             guard let self else { return }
             guard let image else {
                 Task { @MainActor in
                     self.isExporting = false
-                    self.phaseLabel = ""
+                    self.exportLabel = ""
                     completion(.failure(MobileExportError.busy))
                 }
                 return
@@ -253,7 +286,7 @@ final class MobileGradeSession: ObservableObject {
                     Task { @MainActor in
                         guard self.exportToken == current else { return }
                         self.isExporting = false
-                        self.phaseLabel = ""
+                        self.exportLabel = ""
                         self.phaseProgress = 0
                         self.lastSavedURL = destination
                         completion(.success(destination))
@@ -262,7 +295,7 @@ final class MobileGradeSession: ObservableObject {
                     Task { @MainActor in
                         guard self.exportToken == current else { return }
                         self.isExporting = false
-                        self.phaseLabel = ""
+                        self.exportLabel = ""
                         self.phaseProgress = 0
                         completion(.failure(error))
                     }

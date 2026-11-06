@@ -17,6 +17,8 @@
 		2BBE8B618E3111712F7705E1 /* ClarityMath.swift in Sources */ = {isa = PBXBuildFile; fileRef = B40D9688ECA89E29FA8C7A23 /* ClarityMath.swift */; };
 		316F57C8CAD0404467B17FC9 /* PreviewLUTService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA5E884E31AEC9550F9F2DE6 /* PreviewLUTService.swift */; };
 		31CC1159B202E6D41445C6A6 /* PreviewRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 591C388D6CF8327F760B1AA8 /* PreviewRenderer.swift */; };
+		5EEDAA0000000000000000B1 /* PreviewAdjustments.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EEDAA0000000000000000A1 /* PreviewAdjustments.swift */; };
+		5EEDAA0000000000000000B2 /* PhotoLibraryExport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EEDAA0000000000000000A2 /* PhotoLibraryExport.swift */; };
 		338DB01C9D100315976C35EC /* MHousing.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7000FDC6B607084B4E41031 /* MHousing.swift */; };
 		37CE7C7F0E1C3F7BD0511663 /* Profile.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5DDE390ABD8E7D1130C5CC4 /* Profile.swift */; };
 		38BCA26A67A2CBD0D33C01DC /* ClarityProcessors.swift in Sources */ = {isa = PBXBuildFile; fileRef = B13EFF5760A65800C790DE48 /* ClarityProcessors.swift */; };
@@ -98,6 +100,8 @@
 		51E21B85BAA1C58F0581CE1C /* Interpolation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Interpolation.swift; sourceTree = "<group>"; };
 		541F90B352AB0568252392FE /* PreviewPreflight.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewPreflight.swift; sourceTree = "<group>"; };
 		591C388D6CF8327F760B1AA8 /* PreviewRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewRenderer.swift; sourceTree = "<group>"; };
+		5EEDAA0000000000000000A1 /* PreviewAdjustments.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewAdjustments.swift; sourceTree = "<group>"; };
+		5EEDAA0000000000000000A2 /* PhotoLibraryExport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoLibraryExport.swift; sourceTree = "<group>"; };
 		5E94784063019C453EADDF1F /* ClarityAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClarityAnalyzer.swift; sourceTree = "<group>"; };
 		5EE02E4714B045BEB941B1DD /* ColorReferenceService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColorReferenceService.swift; sourceTree = "<group>"; };
 		60CF3A68DFD8F907F87422F9 /* MobileModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileModels.swift; sourceTree = "<group>"; };
@@ -261,6 +265,7 @@
 			isa = PBXGroup;
 			children = (
 				1CEE45A13ABE31F2DB4722F3 /* MobileDevelopSession.swift */,
+				5EEDAA0000000000000000A2 /* PhotoLibraryExport.swift */,
 				E536D899C0B961A72C903EA3 /* MobileEngine.swift */,
 				EDED726EC9328414B6BE600A /* MobileGradeSession.swift */,
 			);
@@ -358,6 +363,7 @@
 				FA5E884E31AEC9550F9F2DE6 /* PreviewLUTService.swift */,
 				541F90B352AB0568252392FE /* PreviewPreflight.swift */,
 				591C388D6CF8327F760B1AA8 /* PreviewRenderer.swift */,
+				5EEDAA0000000000000000A1 /* PreviewAdjustments.swift */,
 				8BBC01B9DEC3CC008E8AA1CE /* RawDecoder.swift */,
 			);
 			path = Services;
@@ -501,6 +507,7 @@
 				D7E0D191AA1C984B7EDC2993 /* MobileCatalog.swift in Sources */,
 				5E4A3B27AE8A660896679EE6 /* MobileComponents.swift in Sources */,
 				FAEC0537770F0FDE1AD82B2B /* MobileDevelopSession.swift in Sources */,
+				5EEDAA0000000000000000B2 /* PhotoLibraryExport.swift in Sources */,
 				54A36A910D1B727D9BDA0A2A /* MobileEngine.swift in Sources */,
 				FDBDA364A4E40B2B52CA1EBA /* MobileGradeSession.swift in Sources */,
 				EFF0B4F2FD75234839FD939E /* MobileModels.swift in Sources */,
@@ -514,6 +521,7 @@
 				316F57C8CAD0404467B17FC9 /* PreviewLUTService.swift in Sources */,
 				9F8BEB91EEFBC65562553BA5 /* PreviewPreflight.swift in Sources */,
 				31CC1159B202E6D41445C6A6 /* PreviewRenderer.swift in Sources */,
+				5EEDAA0000000000000000B1 /* PreviewAdjustments.swift in Sources */,
 				681EEE5D1A70C4EB8E02039E /* PrintingStage.swift in Sources */,
 				37CE7C7F0E1C3F7BD0511663 /* Profile.swift in Sources */,
 				90027013E8AB159B5EC8F830 /* RandomStats.swift in Sources */,

@@ -9,6 +9,8 @@ final class MobileEngine: ObservableObject {
         var imported: Int = 0
         var rejected: Int = 0
         var firstID: String?
+        /// 第一张被拒的原因（文件名 / 错误文案），用于把失败原因透出到 toast 与日志。
+        var reason: String = ""
     }
 
     let store: LibraryStore
@@ -26,6 +28,17 @@ final class MobileEngine: ObservableObject {
         store = LibraryStore(root: base)
         refreshPhotos()
         warmThumbnails()
+        importDebugFileIfNeeded()
+    }
+
+    /// 验收脚本用：`--import <绝对路径>` 在启动时把指定 RAW 入库，省掉手工点「导入」。
+    /// 只在显式传入该参数时生效，Release 构建也保留（自动化截图需要）。
+    private func importDebugFileIfNeeded() {
+        let args = ProcessInfo.processInfo.arguments
+        guard let index = args.firstIndex(of: "--import"), args.indices.contains(index + 1) else { return }
+        let path = args[index + 1]
+        guard FileManager.default.fileExists(atPath: path) else { return }
+        _ = importPhotos([URL(fileURLWithPath: path)])
     }
 
     // MARK: - 照片库
@@ -50,6 +63,11 @@ final class MobileEngine: ObservableObject {
                 generateThumbnail(for: photo)
             } catch {
                 report.rejected += 1
+                if report.reason.isEmpty {
+                    report.reason = "\(url.lastPathComponent)：\((error as NSError).localizedDescription)"
+                }
+                NSLog("MImport rejected %@ — %@", url.lastPathComponent,
+                      (error as NSError).localizedDescription)
             }
         }
         isImporting = false
@@ -101,7 +119,7 @@ final class MobileEngine: ObservableObject {
             color: photo.colorLabel.flatMap(MColorLabel.init(rawValue:)),
             isGraded: !photo.edit.quickIntents.isEmpty,
             exposure: exposure,
-            thumbnailURL: photo.thumbnailPath.map { URL(fileURLWithPath: $0) }
+            thumbnailURL: store.thumbnailURL(for: photo)
         )
     }
 
@@ -118,7 +136,7 @@ final class MobileEngine: ObservableObject {
         let edit = photo.edit
         thumbnailQueue.async { [weak self] in
             guard let self else { return }
-            guard let loaded = try? ImageLoader.load(url: url),
+            guard let loaded = try? ImageLoader.load(url: url, maxSize: 320),
                   var params = try? edit.runtimeParams() else { return }
             params.io.inputColorSpace = loaded.colorSpace
             params.io.inputCCTFDecoding = loaded.cctfDecoding

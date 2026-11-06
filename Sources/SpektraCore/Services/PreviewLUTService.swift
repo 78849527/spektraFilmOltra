@@ -11,6 +11,8 @@ import Foundation
 final class PreviewLUTService: @unchecked Sendable {
     /// 45³ 在真实 RAW 上 p99 会超过 1.0；65³ 实测 max 1.22 / p99 0.86。
     static let defaultResolution = 65
+    /// D0 预测帧长边上限：高像素 1/4 预览也保持跟手，细度由 D1 补齐。
+    static let maxPredictionEdge = 1000
 
     static let shaperLowEV = -8.0
     static let shaperHighEV = 6.0
@@ -104,12 +106,16 @@ final class PreviewLUTService: @unchecked Sendable {
             var logOffset: Double
             if encodedInput {
                 let scale = pow(2.0, autoEV) / PreviewLUTService.encodedMax
-                let scaled = source.data.map { $0 * scale }
+                let scaled = source.data.map { Double($0) * scale }
                 stage = PreviewLUTService.lookup(t1, values: scaled, width: width, height: height, shaped: false)
                 logOffset = exposureEV * log10(2.0)
             } else {
-                stage = PreviewLUTService.lookup(t1, values: source.data, width: width, height: height, shaped: true)
-                logOffset = (autoEV + exposureEV) * log10(2.0)
+                // 自动曝光在真管线的 preprocess 阶段施加，早于 rgbToFilmRaw；
+                // 因此必须挪到 t1 的 shaper 坐标上，不能放到 t1 之后。
+                stage = PreviewLUTService.lookup(
+                    t1, values: source.data.map(Double.init), width: width, height: height,
+                    shaped: true, shapedEVOffset: autoEV)
+                logOffset = exposureEV * log10(2.0)
             }
             let norm1 = PreviewLUTService.offsetNormalized(stage, offset: logOffset / span1)
 
@@ -207,12 +213,10 @@ final class PreviewLUTService: @unchecked Sendable {
                                      inject: .logEPrint, collect: .rgbOut)
         let t4 = Self.rawTable(o4, n: n)
 
-        var bakedFactor = 1.0
-        var compPipe: SimulationPipeline?
-        if params.enlarger.printExposureCompensation {
-            bakedFactor = pipe.previewPrintExposureFactor()
-            compPipe = SimulationPipeline(params: Self.makeCompParams(params), keepTaps: false)
-        }
+        // 补偿管线常驻：快速“拍摄曝光”会在拖动时临时关闭补偿，
+        // 同一份表必须能在补偿开/关之间切换，不能因此重烘。
+        let bakedFactor = pipe.previewPrintExposureFactor()
+        let compPipe = SimulationPipeline(params: Self.makeCompParams(params), keepTaps: false)
 
         return Bundle(
             key: key, resolution: n,
@@ -239,7 +243,11 @@ final class PreviewLUTService: @unchecked Sendable {
         p.filmRender.grain.active = false
         p.filmRender.grain.particleAreaUM2 = 0
         p.filmRender.grain.blur = 0
+        p.filmRender.grain.densityMin = [0.03, 0.03, 0.03]
+        p.filmRender.grain.uniformity = [0.97, 0.99, 0.97]
         p.filmRender.dirCouplers.diffusionSizeUM = 0
+        p.filmRender.dirCouplers.inhibitionInterlayer = 1
+        p.printRender.densityCurvesMorph.active = false
         p.enlarger.lensBlur = 0
         p.enlarger.printExposure = 1
         p.enlarger.printExposureCompensation = false
@@ -320,9 +328,9 @@ final class PreviewLUTService: @unchecked Sendable {
                 for g in 0..<n {
                     let src = ((r * n + g) * n + b) * 3
                     let dst = ((b * (n * n) + r * n + g)) * 3
-                    image.data[dst] = values[src]
-                    image.data[dst + 1] = values[src + 1]
-                    image.data[dst + 2] = values[src + 2]
+                    image.data[dst] = Float(values[src])
+                    image.data[dst + 1] = Float(values[src + 1])
+                    image.data[dst + 2] = Float(values[src + 2])
                 }
             }
         }
@@ -334,8 +342,8 @@ final class PreviewLUTService: @unchecked Sendable {
         var lo = Double.infinity
         var hi = -Double.infinity
         for value in image.data where value.isFinite {
-            lo = min(lo, value)
-            hi = max(hi, value)
+            lo = min(lo, Double(value))
+            hi = max(hi, Double(value))
         }
         guard lo.isFinite, hi.isFinite else { return (0, 1) }
         let extra = (hi - lo) * rel + pad
@@ -352,7 +360,7 @@ final class PreviewLUTService: @unchecked Sendable {
                     let src = ((b * (n * n) + r * n + g)) * 3
                     let dst = ((r * n + g) * n + b) * 3
                     for c in 0..<3 {
-                        let value = image.data[src + c]
+                        let value = Double(image.data[src + c])
                         let centered = (value.isFinite ? value : 0) - lo
                         values[dst + c] = Float(centered / denom)
                     }
@@ -384,7 +392,7 @@ final class PreviewLUTService: @unchecked Sendable {
     /// 三线性插值；shaped 为 true 时先做 log2 shaper。
     static func lookup(_ lut: FloatLUT3D, values: [Double],
                                    width: Int, height: Int,
-                                   shaped: Bool) -> [Double] {
+                                   shaped: Bool, shapedEVOffset: Double = 0) -> [Double] {
         let n = lut.size
         let scale = Double(n - 1)
         let last = n - 2
@@ -407,7 +415,7 @@ final class PreviewLUTService: @unchecked Sendable {
                     let index: Double
                     if shaped {
                         let positive = max(value, 1e-10)
-                        index = min(max((log2(positive) - lo) / span, 0), 1)
+                        index = min(max((log2(positive) + shapedEVOffset - lo) / span, 0), 1)
                     } else {
                         index = min(max(value, 0), 1)
                     }
@@ -502,9 +510,9 @@ final class PreviewLUTService: @unchecked Sendable {
                 let rowStart = y * width
                 for x in 0..<width {
                     let p = (rowStart + x) * 3
-                    base[p] = clamp(CCTF.encode(image.data[p].isFinite ? image.data[p] : 0))
-                    base[p + 1] = clamp(CCTF.encode(image.data[p + 1].isFinite ? image.data[p + 1] : 0))
-                    base[p + 2] = clamp(CCTF.encode(image.data[p + 2].isFinite ? image.data[p + 2] : 0))
+                    base[p] = Float(clamp(CCTF.encode(Double(image.data[p]))))
+                    base[p + 1] = Float(clamp(CCTF.encode(Double(image.data[p + 1]))))
+                    base[p + 2] = Float(clamp(CCTF.encode(Double(image.data[p + 2]))))
                 }
             }
             if width * height >= 200_000 {
@@ -546,12 +554,26 @@ final class PreviewLUTService: @unchecked Sendable {
         e.camera.autoExposure = false
         e.camera.exposureCompensationEV = 0
         e.enlarger.printExposure = 1
+        // 补偿管线常驻，补偿开关不参与烘焙键（快速拍摄曝光会临时开关它）。
+        e.enlarger.printExposureCompensation = false
         e.enlarger.yFilterShift = 0
         e.enlarger.mFilterShift = 0
         e.enlarger.preflashExposure = 0
         e.enlarger.preflashYFilterShift = 0
         e.enlarger.preflashMFilterShift = 0
         e.filmRender.halation.boostEV = 0
+        // 连续轴归零：这些量由交互近似层补足，不该让拖动触发重烘焙。
+        e.filmRender.grain.active = false
+        e.filmRender.grain.particleAreaUM2 = 0
+        e.filmRender.grain.blur = 0
+        e.filmRender.grain.densityMin = [0.03, 0.03, 0.03]
+        e.filmRender.grain.uniformity = [0.97, 0.99, 0.97]
+        e.filmRender.dirCouplers.diffusionSizeUM = 0
+        e.filmRender.dirCouplers.inhibitionInterlayer = 1
+        e.printRender.densityCurvesMorph = PrintCurvesMorphParams()
+        e.enlarger.lensBlur = 0
+        e.scanner.unsharpMask = [0, 0]
+        e.scanner.lensBlur = 0
         // 印相曝光补偿决定是否需要补偿管线，不能从键里剔除（否则后开补偿会复用无管线缓存）。
         e.quickIntents = [:]
         e.io.inputColorSpace = inputColorSpace

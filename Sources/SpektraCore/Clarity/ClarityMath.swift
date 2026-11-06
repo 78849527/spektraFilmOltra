@@ -67,7 +67,7 @@ enum ClarityMath {
             parallelFor(rows: image.height) { y in
                 let start = y * image.width * 3
                 for i in start..<(start + image.width * 3) {
-                    base[i] = srgbToLinear(image.data[i])
+                    base[i] = Float(srgbToLinear(Double(image.data[i])))
                 }
             }
         }
@@ -81,8 +81,8 @@ enum ClarityMath {
             parallelFor(rows: image.height) { y in
                 let start = y * image.width * 3
                 for i in start..<(start + image.width * 3) {
-                    let value = linearToSRGB(image.data[i])
-                    base[i] = clampToUnit ? clamp(value, 0, 1) : value
+                    let value = linearToSRGB(Double(image.data[i]))
+                    base[i] = Float(clampToUnit ? clamp(value, 0, 1) : value)
                 }
             }
         }
@@ -98,7 +98,8 @@ enum ClarityMath {
                 for x in 0..<image.width {
                     let i = y * image.width + x
                     base[i] = luminance(
-                        image.data[i * 3], image.data[i * 3 + 1], image.data[i * 3 + 2]
+                        Double(image.data[i * 3]), Double(image.data[i * 3 + 1]),
+                        Double(image.data[i * 3 + 2])
                     )
                 }
             }
@@ -128,17 +129,17 @@ enum ClarityMath {
                 for yy in y0..<y1 {
                     for xx in x0..<x1 {
                         let index = (yy * image.width + xx) * 3
-                        r += image.data[index]
-                        g += image.data[index + 1]
-                        b += image.data[index + 2]
+                        r += Double(image.data[index])
+                        g += Double(image.data[index + 1])
+                        b += Double(image.data[index + 2])
                         count += 1
                     }
                 }
                 let inv = 1.0 / Double(max(count, 1))
                 let index = (y * width + x) * 3
-                output.data[index] = r * inv
-                output.data[index + 1] = g * inv
-                output.data[index + 2] = b * inv
+                output.data[index] = Float(r * inv)
+                output.data[index + 1] = Float(g * inv)
+                output.data[index + 2] = Float(b * inv)
             }
         }
         return output
@@ -187,7 +188,8 @@ enum ClarityMath {
                         for x in 0..<image.width {
                             let i = y * image.width + x
                             let lab = oklab(fromLinear: Vec3(
-                                image.data[i * 3], image.data[i * 3 + 1], image.data[i * 3 + 2]
+                                Double(image.data[i * 3]), Double(image.data[i * 3 + 1]),
+                                Double(image.data[i * 3 + 2])
                             ))
                             lp[i] = lab.x
                             ap[i] = lab.y

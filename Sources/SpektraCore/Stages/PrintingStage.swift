@@ -38,9 +38,12 @@ final class PrintingStage {
             function: { [unowned self] image in self.filmCMYToPrintLogRaw(image) },
             dataMin: cmyBlackData,
             dataMax: cmyWhiteData,
-            useLUT: settings.useEnlargerLUT
+            useLUT: settings.useEnlargerLUT,
+            key: enlargerCacheKey(dataMin: cmyBlackData, dataMax: cmyWhiteData)
         )
-        var raw = logRaw.map { Vec3(pow(10, $0.x), pow(10, $0.y), pow(10, $0.z)) }
+        var raw = logRaw.map {
+            Vec3(ImageMath.pow10Fast($0.x), ImageMath.pow10Fast($0.y), ImageMath.pow10Fast($0.z))
+        }
         let exposure = enlarger.printExposure
         raw = raw.map { $0 * exposure }
         let correction = colorReference.blackWhitePrintingExposureCorrection()
@@ -62,6 +65,23 @@ final class PrintingStage {
             densityCurves: curves,
             gammaFactor: [1, 1, 1]
         )
+    }
+
+    /// 放大机 LUT 的缓存键：滤色片、预闪、印相补偿与黑白端点都会改变烘焙函数/域。
+    private func enlargerCacheKey(dataMin: [Double], dataMax: [Double]) -> String {
+        var parts = ["\(film.info.stock)|\(printProfile.info.stock)|\(enlarger.illuminant)"]
+        let values: [Double] = [
+            enlarger.yFilterShift, enlarger.mFilterShift,
+            enlarger.cFilterNeutral, enlarger.mFilterNeutral, enlarger.yFilterNeutral,
+            enlarger.preflashExposure, enlarger.preflashYFilterShift, enlarger.preflashMFilterShift,
+            enlargerService.compensationEV,
+            enlarger.printExposureCompensation ? 1 : 0,
+            enlarger.normalizePrintExposure ? 1 : 0,
+        ]
+        for value in values + dataMin + dataMax {
+            parts.append(String(format: "%.8f", value))
+        }
+        return parts.joined(separator: "|")
     }
 
     private func printResponse() -> (sensitivity: [[Double]], illuminant: [Double]) {
@@ -87,25 +107,17 @@ final class PrintingStage {
 
     private func filmCMYToPrintLogRaw(_ cmyFilmDensity: ImageRGB) -> ImageRGB {
         let (sensitivity, printIlluminant) = printResponse()
-        let densitySpectral = DensityCurves.computeDensitySpectral(
+        let wavelengthCount = min(min(film.data.channelDensity.count,
+                                      sensitivity.count), printIlluminant.count)
+        var raw = DensityCurves.spectralIntegral(
             channelDensity: film.data.channelDensity,
+            baseDensity: film.data.baseDensity,
             densityCMY: cmyFilmDensity,
-            baseDensity: film.data.baseDensity
+            weights: sensitivity,
+            light: { density, w in self.densityToLight(density, printIlluminant[w]) },
+            wavelengthCount: wavelengthCount
         )
         let pixelCount = cmyFilmDensity.width * cmyFilmDensity.height
-        var rawValues = [Double](repeating: 0, count: pixelCount * 3)
-        for p in 0..<pixelCount {
-            let density = densitySpectral[p]
-            for c in 0..<3 {
-                var sum = 0.0
-                for w in 0..<density.count {
-                    let light = densityToLight(density[w], printIlluminant[w])
-                    sum += light * sensitivity[w][c]
-                }
-                rawValues[p * 3 + c] = sum
-            }
-        }
-        var raw = ImageRGB(width: cmyFilmDensity.width, height: cmyFilmDensity.height, data: rawValues)
         let factor = computeExposureFactorMidgray(sensitivity: sensitivity, printIlluminant: printIlluminant)
         raw = raw.map { $0 * factor }
         if enlarger.preflashExposure > 0 {
@@ -119,7 +131,7 @@ final class PrintingStage {
                         let light = densityToLight(baseDensity[w], preflashIlluminant[w])
                         sum += light * sensitivity[w][c]
                     }
-                    raw.data[p * 3 + c] += sum * enlarger.preflashExposure
+                    raw.data[p * 3 + c] += Float(sum * enlarger.preflashExposure)
                 }
             }
         }
@@ -171,7 +183,7 @@ final class PrintingStage {
     }
 
     private func densityToLight(_ density: Double, _ light: Double) -> Double {
-        let value = pow(10, -density) * light
+        let value = ImageMath.pow10Fast(-density) * light
         return value.isFinite ? value : 0
     }
 

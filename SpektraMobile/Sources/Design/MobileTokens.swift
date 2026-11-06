@@ -73,8 +73,9 @@ enum MRadius {
 }
 
 enum MMetric {
-    static let safeTop: CGFloat = 54
-    static let safeBottom: CGFloat = 34
+    /// 兜底值：真实布局一律用 `MSafeInsets`（由根视图按设备安全区注入）。
+    static let safeTopFallback: CGFloat = 54
+    static let safeBottomFallback: CGFloat = 34
     static let pageMargin: CGFloat = 20
     static let navHeight: CGFloat = 44
     static let tabsHeight: CGFloat = 42
@@ -82,6 +83,58 @@ enum MMetric {
     static let drawerMin: CGFloat = 234
     static let drawerMid: CGFloat = 468
     static let drawerMax: CGFloat = 560
+}
+
+/// 设备安全区与可用画布：换机型后所有页面都按真实值排版，不再写死 393×852。
+struct MSafeInsets: Equatable {
+    var top: CGFloat
+    var bottom: CGFloat
+    var size: CGSize
+
+    var width: CGFloat { size.width }
+    var height: CGFloat { size.height }
+    var contentHeight: CGFloat { max(1, size.height - top - bottom) }
+
+    static let fallback = MSafeInsets(
+        top: MMetric.safeTopFallback,
+        bottom: MMetric.safeBottomFallback,
+        size: CGSize(width: 393, height: 852)
+    )
+}
+
+private struct MSafeInsetsKey: EnvironmentKey {
+    static let defaultValue = MSafeInsets.fallback
+}
+
+extension EnvironmentValues {
+    var mSafeInsets: MSafeInsets {
+        get { self[MSafeInsetsKey.self] }
+        set { self[MSafeInsetsKey.self] = newValue }
+    }
+}
+
+/// 真实屏幕度量：整屏尺寸 + 安全区。
+///
+/// 不能从 `GeometryReader.safeAreaInsets` 取——根视图一旦 `ignoresSafeArea()`
+/// 填满全屏，代理就会报 0。这里直接读窗口的真实几何，只读一次。
+enum MScreenMetrics {
+    static func current() -> MSafeInsets {
+        #if os(iOS)
+        let window = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap { $0.windows }
+            .first(where: { $0.isKeyWindow })
+            ?? UIApplication.shared.connectedScenes
+                .compactMap { $0 as? UIWindowScene }
+                .flatMap { $0.windows }
+                .first
+        guard let window else { return .fallback }
+        let insets = window.safeAreaInsets
+        return MSafeInsets(top: insets.top, bottom: insets.bottom, size: window.bounds.size)
+        #else
+        return .fallback
+        #endif
+    }
 }
 
 // MARK: - 字体
@@ -158,6 +211,26 @@ enum DebugLaunch {
 
     static var showSheet: Bool { args.contains("--sheet") }
     static var exportOpen: Bool { args.contains("--export") }
+    /// 截图验收用：等原片读完（`canExport` 为真）后自动开跑导出，好截到「导出中」的进度行。
+    static var exportAutoStart: Bool { args.contains("--export-run") }
+    /// 截图验收用：调色「调整」面板默认从底部开始，好截到「质感」分区。
+    static var gradePanelBottom: Bool { args.contains("--grade-bottom") }
+    /// 机型矩阵验收用：启动时把真实安全区与推导出的开孔矩形打到日志（`log show` 可读）。
+    static var probeGeometry: Bool { args.contains("--probe-geometry") }
+
+    /// 强制开孔形态。真机按安全区高度自动判断（`MHousing.detect`）；
+    /// `--housing notch|island|none` 用来在任意机型上强制跑某一分支做视觉验收。
+    static var housingOverride: MHousingKind {
+        guard let index = args.firstIndex(of: "--housing"), args.indices.contains(index + 1) else {
+            return .auto
+        }
+        switch args[index + 1] {
+        case "notch": return .notch
+        case "island": return .island
+        case "none": return .none
+        default: return .auto
+        }
+    }
 
     static var modePro: Bool {
         guard let index = args.firstIndex(of: "--mode"), args.indices.contains(index + 1) else { return false }

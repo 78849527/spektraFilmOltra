@@ -16,6 +16,10 @@ enum RawDecoder {
         var outputColorSpace: String = "ACES2065-1"
         var outputCCTFEncoding: Bool = false
         var lensCorrection: Bool = true
+        /// 长边上限；nil 表示全分辨率。
+        var maxSize: Int? = nil
+        /// 草稿模式：跳过高质量去马赛克，模拟器上避免等待 MobileAsset 相机描述。
+        var draftMode: Bool = false
     }
 
     enum DecodeError: Error, CustomStringConvertible {
@@ -34,10 +38,17 @@ enum RawDecoder {
         guard let filter = CIRAWFilter(imageURL: url) else {
             throw DecodeError.unsupported(url.lastPathComponent)
         }
-        filter.isDraftModeEnabled = false
+        filter.isDraftModeEnabled = options.draftMode
         filter.isLensCorrectionEnabled = options.lensCorrection
         filter.boostAmount = 0
         filter.boostShadowAmount = 0
+        if let maxSize = options.maxSize {
+            let native = filter.nativeSize
+            let longEdge = max(native.width, native.height)
+            if longEdge > 0, CGFloat(maxSize) < longEdge {
+                filter.scaleFactor = Float(CGFloat(maxSize) / longEdge)
+            }
+        }
 
         switch options.whiteBalance {
         case "as_shot", "daylight":
@@ -98,6 +109,57 @@ enum RawDecoder {
             }
         }
         return image.sanitizedNonFinite()
+    }
+
+    /// 模拟器专用回退：`CIRAWFilter` 在 iOS 模拟器上会卡住（MobileAsset 拿不到相机描述）。
+    /// 用 ImageIO 的缩略图管线拿到已去马赛克的图，代价是白平衡采用系统默认，但预览可用。
+    static func decodeThumbnail(url: URL, maxSize: Int) throws -> ImageRGB {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else {
+            throw DecodeError.unsupported(url.lastPathComponent)
+        }
+        let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [String: Any]
+        let fullEdge = max(
+            properties?[kCGImagePropertyPixelWidth as String] as? Int ?? 0,
+            properties?[kCGImagePropertyPixelHeight as String] as? Int ?? 0
+        )
+        let target = max(1, min(maxSize, max(fullEdge, 1)))
+        let thumbnailOptions: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: target,
+        ]
+        guard let thumbnail = CGImageSourceCreateThumbnailAtIndex(
+            source, 0, thumbnailOptions as CFDictionary
+        ) else {
+            throw DecodeError.renderFailed("thumbnail failed")
+        }
+        return try renderLinear(thumbnail)
+    }
+
+    /// CGImage → 线性 sRGB `ImageRGB`。
+    private static func renderLinear(_ image: CGImage) throws -> ImageRGB {
+        let width = image.width
+        let height = image.height
+        guard width > 0, height > 0 else { throw DecodeError.renderFailed("empty image") }
+        let linearSRGB = CGColorSpace(name: CGColorSpace.extendedLinearSRGB)
+            ?? CGColorSpaceCreateDeviceRGB()
+        let ciContext = CIContext(options: [.workingColorSpace: linearSRGB])
+        let ciImage = CIImage(cgImage: image)
+        var buffer = [Float](repeating: 0, count: width * height * 4)
+        buffer.withUnsafeMutableBytes { raw in
+            guard let base = raw.baseAddress else { return }
+            ciContext.render(
+                ciImage, toBitmap: base,
+                rowBytes: width * 4 * MemoryLayout<Float>.size,
+                bounds: CGRect(x: 0, y: 0, width: width, height: height),
+                format: .RGBAf, colorSpace: linearSRGB
+            )
+        }
+        var values = [Double](repeating: 0, count: width * height * 3)
+        for i in 0..<(width * height) {
+            for c in 0..<3 { values[i * 3 + c] = Double(buffer[i * 4 + c]) }
+        }
+        return ImageRGB(width: width, height: height, data: values).sanitizedNonFinite()
     }
 
     /// 基础 EXIF（相机 / 镜头 / 焦距 / 光圈），供导出与界面显示使用。

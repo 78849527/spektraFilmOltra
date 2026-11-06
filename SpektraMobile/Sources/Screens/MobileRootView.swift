@@ -14,7 +14,7 @@ struct MobileRootView: View {
     @State private var debugOpened = false
 
     // 显影 → 调色的「吸入」过渡
-    @State private var rootSize: CGSize = CGSize(width: 393, height: 852)
+    @State private var metrics: MSafeInsets = .fallback
     @State private var flightPhase: MFlightPhase = .idle
     @State private var flightImage: MPlatformImage?
     @State private var flightRect: CGRect = .zero
@@ -38,6 +38,17 @@ struct MobileRootView: View {
     }
 
     var body: some View {
+        content(insets: metrics)
+            .environment(\.mSafeInsets, metrics)
+            // 模拟器上 `machineIdentifier()` 返回宿主架构，`detect()` 永远判成灵动岛，
+            // 刘海分支在模拟器里跑不到。`--housing notch` 用来强制走刘海路径做视觉验收。
+            .environment(\.mHousing, DebugLaunch.housingOverride)
+            .ignoresSafeArea()
+            .background(MColor.app)
+            .preferredColorScheme(.dark)
+    }
+
+    private func content(insets: MSafeInsets) -> some View {
         ZStack {
             HomeScreen(
                 engine: engine,
@@ -57,14 +68,13 @@ struct MobileRootView: View {
                     session: develop,
                     onBack: { closeDevelop() },
                     onOpenGrade: { image, rect in
-                        beginSuck(image: image, from: rect, photoID: develop.photoID)
+                        beginSuck(image: image, from: rect, photoID: develop.photoID, insets: insets)
                     },
                     previewHidden: developPreviewHidden,
                     onToast: showToast
                 )
                 .offset(x: screen == .grade && gradeReturn == .develop ? -72 : 0)
                 .allowsHitTesting(screen == .develop)
-                .transition(.move(edge: .trailing))
                 .zIndex(1)
             }
 
@@ -91,7 +101,7 @@ struct MobileRootView: View {
                         .background(Capsule().fill(MColor.surface3.opacity(0.96)))
                         .overlay(Capsule().strokeBorder(MColor.hairlineStrong, lineWidth: 1))
                         .shadow(color: .black.opacity(0.4), radius: 12, y: 4)
-                        .padding(.bottom, MMetric.safeBottom + 76)
+                        .padding(.bottom, insets.bottom + 76)
                 }
                 .transition(.opacity.combined(with: .offset(y: 8)))
                 .allowsHitTesting(false)
@@ -113,25 +123,45 @@ struct MobileRootView: View {
                     .zIndex(30)
             }
         }
-        .background(
-            GeometryReader { geo in
-                Color.clear
-                    .onAppear { rootSize = geo.size }
-                    .onChange(of: geo.size) { _, newValue in rootSize = newValue }
-            }
-        )
         .animation(MMotion.push, value: screen)
-        .background(MColor.app)
-        .preferredColorScheme(.dark)
         .task {
             guard !debugOpened else { return }
             debugOpened = true
-            guard let first = engine.photos.first else { return }
-            switch screen {
-            case .develop: openDevelop(first.id)
-            case .grade: openGrade(first.id, entry: .direct, returningTo: .home)
-            case .home: break
+            // 窗口就绪后再取真实安全区：此时 UIWindow 已经完成第一次布局。
+            let current = MScreenMetrics.current()
+            if current != metrics { metrics = current }
+            if DebugLaunch.probeGeometry {
+                let housing = MDeviceHousing.resolved(housingSetting)
+                let opening = MDeviceHousing.opening(kind: housing, insets: current)
+                NSLog("MGeometry size=%.0fx%.0f top=%.0f bottom=%.0f housing=%@ opening=%@",
+                      current.size.width, current.size.height,
+                      current.top, current.bottom, housing.rawValue,
+                      NSCoder.string(for: opening))
             }
+            guard let first = engine.photos.first else { return }
+            // 首帧直达：此时窗口还没完成第一次布局，带 transition 插入会让视图停在屏幕外。
+            switch screen {
+            case .develop:
+                develop = engine.openDevelop(photoID: first.id)
+            case .grade:
+                grade = engine.openGrade(photoID: first.id, entry: .direct)
+            case .home:
+                break
+            }
+            applyDebugQuickIfNeeded(to: develop)
+        }
+    }
+
+    /// 验收脚本用：`--quick color_density=80,grain_amount=60` 在首帧后施加参数，
+    /// 用来比对「预测帧是否真的随参数变化」。
+    private func applyDebugQuickIfNeeded(to session: MobileDevelopSession?) {
+        guard let session else { return }
+        let args = ProcessInfo.processInfo.arguments
+        guard let index = args.firstIndex(of: "--quick"), args.indices.contains(index + 1) else { return }
+        for pair in args[index + 1].split(separator: ",") {
+            let parts = pair.split(separator: "=")
+            guard parts.count == 2, let value = Double(parts[1]) else { continue }
+            session.applyQuick(String(parts[0]), value)
         }
     }
 
@@ -187,41 +217,20 @@ struct MobileRootView: View {
 
     // MARK: - 照片吸入
 
-    /// 开孔落点：灵动岛 / 刘海 / 平顶顶部边缘。
-    private var housingTarget: CGRect {
-        let width = max(1, rootSize.width)
-        switch MDeviceHousing.resolved(housingSetting) {
-        case .island, .auto:
-            let islandWidth = width * 0.336
-            let islandHeight = islandWidth * 0.318
-            return CGRect(
-                x: (width - islandWidth) / 2,
-                y: width * 0.0178,
-                width: islandWidth,
-                height: islandHeight
-            )
-        case .notch:
-            let notchWidth = width * 0.432
-            let notchHeight = notchWidth * 0.241
-            return CGRect(
-                x: (width - notchWidth) / 2,
-                y: 1,
-                width: notchWidth,
-                height: notchHeight
-            )
-        case .none:
-            return CGRect(x: (width - 90) / 2, y: 0, width: 90, height: 3)
-        }
+    /// 开孔落点：灵动岛 / 刘海 / 平顶顶部边缘，按真实安全区推导。
+    private func housingTarget(_ insets: MSafeInsets) -> CGRect {
+        MDeviceHousing.opening(kind: MDeviceHousing.resolved(housingSetting), insets: insets)
     }
 
-    private func beginSuck(image: MPlatformImage?, from rect: CGRect, photoID: String) {
+    private func beginSuck(image: MPlatformImage?, from rect: CGRect, photoID: String,
+                           insets: MSafeInsets) {
         guard flightPhase == .idle else { return }
         guard let image, rect.width > 1, rect.height > 1 else {
             openGrade(photoID, entry: .handoff, returningTo: .develop)
             return
         }
 
-        let target = housingTarget
+        let target = housingTarget(insets)
         flightImage = image
         flightRect = rect
         flightRadius = 3
@@ -232,18 +241,18 @@ struct MobileRootView: View {
         withAnimation(.spring(response: 0.48, dampingFraction: 0.66)) {
             flightRect = target
             flightRadius = min(target.width, target.height) / 2
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) {
-            withAnimation(.easeIn(duration: 0.18)) { flightOpacity = 0 }
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.54) {
-            guard flightPhase == .sucking else { return }
-            flightPhase = .idle
-            flightRect = target
-            flightOpacity = 0
-            flightImage = nil
-            // 画布保持隐藏，等从调色台返回时再由 resetFlight 恢复，避免横移过程中背后又出现一张。
-            openGrade(photoID, entry: .handoff, returningTo: .develop)
+        } completion: {
+            withAnimation(.easeIn(duration: 0.18)) {
+                flightOpacity = 0
+            } completion: {
+                guard flightPhase == .sucking else { return }
+                flightPhase = .idle
+                flightRect = target
+                flightOpacity = 0
+                flightImage = nil
+                // 画布保持隐藏，等从调色台返回时再由 resetFlight 恢复，避免横移过程中背后又出现一张。
+                openGrade(photoID, entry: .handoff, returningTo: .develop)
+            }
         }
     }
 

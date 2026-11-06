@@ -6,7 +6,9 @@ enum SpatialEffects {
         let blurred = FastGaussian.filter(image, sigma: sigma)
         var output = image
         for i in 0..<image.data.count {
-            output.data[i] = image.data[i] + amount * (image.data[i] - blurred.data[i])
+            let value = Double(image.data[i])
+            let blur = Double(blurred.data[i])
+            output.data[i] = Float(value + amount * (value - blur))
         }
         return output
     }
@@ -21,23 +23,23 @@ enum SpatialEffects {
         guard boostEV > 0 else { return image }
         let maximum = image.data.max() ?? 0
         guard maximum != 0 else { return image }
-        let rawX0 = min(max(midgray * pow(2, protectEV), 0), maximum)
-        if rawX0 == maximum { return image }
+        let rawX0 = min(max(midgray * pow(2, protectEV), 0), Double(maximum))
+        if rawX0 == Double(maximum) { return image }
         let a = pow(28.0, 1.0 - boostRange)
-        let x0 = rawX0 / maximum
+        let x0 = rawX0 / Double(maximum)
         let denominator = exp(a * (1 - x0)) - a * (1 - x0) - 1
         guard denominator > 0 else { return image }
         let k = (pow(2, boostEV) - 1) / denominator
-        let boostScale = k * maximum
-        let invMax = 1.0 / maximum
+        let boostScale = k * Double(maximum)
+        let invMax = 1.0 / Double(maximum)
         var output = image
         for i in 0..<image.data.count {
-            let value = image.data[i]
+            let value = Double(image.data[i])
             if value <= rawX0 {
-                output.data[i] = value
+                output.data[i] = Float(value)
             } else {
                 let dx = (value - rawX0) * invMax
-                output.data[i] = value + boostScale * (exp(a * dx) - a * dx - 1)
+                output.data[i] = Float(value + boostScale * (exp(a * dx) - a * dx - 1))
             }
         }
         return output
@@ -56,9 +58,10 @@ enum SpatialEffects {
             let tail = FastGaussian.exponentialFilter(raw, decay: tailDecays, nGaussians: 3)
             for c in 0..<3 {
                 for i in 0..<(image.width * image.height) {
-                    let scattered = (1 - tailWeights[c]) * core.data[i * 3 + c] + tailWeights[c] * tail.data[i * 3 + c]
-                    let original = raw.data[i * 3 + c]
-                    raw.data[i * 3 + c] = (1 - scatterAmount) * original + scatterAmount * scattered
+                    let scattered = (1 - tailWeights[c]) * Double(core.data[i * 3 + c])
+                        + tailWeights[c] * Double(tail.data[i * 3 + c])
+                    let original = Double(raw.data[i * 3 + c])
+                    raw.data[i * 3 + c] = Float((1 - scatterAmount) * original + scatterAmount * scattered)
                 }
             }
         }
@@ -75,17 +78,17 @@ enum SpatialEffects {
                 let sigmaK = sigmas.map { max($0 * sqrt(Double(k)), 1e-6) }
                 let component = FastGaussian.filter(raw, sigma: sigmaK)
                 let weight = decay[k - 1]
-                for i in 0..<blur.data.count { blur.data[i] += weight * component.data[i] }
+                for i in 0..<blur.data.count { blur.data[i] += Float(weight * Double(component.data[i])) }
             }
             for c in 0..<3 {
                 for i in 0..<(image.width * image.height) {
-                    raw.data[i * 3 + c] += strengths[c] * blur.data[i * 3 + c]
+                    raw.data[i * 3 + c] += Float(strengths[c] * Double(blur.data[i * 3 + c]))
                 }
             }
             if params.halationRenormalize {
                 for c in 0..<3 {
                     for i in 0..<(image.width * image.height) {
-                        raw.data[i * 3 + c] /= (1 + strengths[c])
+                        raw.data[i * 3 + c] = Float(Double(raw.data[i * 3 + c]) / (1 + strengths[c]))
                     }
                 }
             }

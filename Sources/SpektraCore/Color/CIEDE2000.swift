@@ -107,14 +107,14 @@ enum CIEDE2000 {
         var values = [Double](repeating: 0, count: count)
         for p in 0..<count {
             let r = Vec3(
-                reference.data[p * 3],
-                reference.data[p * 3 + 1],
-                reference.data[p * 3 + 2]
+                Double(reference.data[p * 3]),
+                Double(reference.data[p * 3 + 1]),
+                Double(reference.data[p * 3 + 2])
             )
             let c = Vec3(
-                candidate.data[p * 3],
-                candidate.data[p * 3 + 1],
-                candidate.data[p * 3 + 2]
+                Double(candidate.data[p * 3]),
+                Double(candidate.data[p * 3 + 1]),
+                Double(candidate.data[p * 3 + 2])
             )
             values[p] = deltaE(lab(fromProPhotoLinear: r), lab(fromProPhotoLinear: c))
         }

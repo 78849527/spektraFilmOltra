@@ -420,7 +420,7 @@ enum EXRWriter {
             for c in [2, 1, 0] {
                 for x in 0..<width {
                     let pixel = (y * width + x) * 3
-                    let value = image.data[pixel + c]
+                    let value = Double(image.data[pixel + c])
                     if half {
                         block.appendUInt16(EXRWriter.halfBits(from: Float(value)))
                     } else {

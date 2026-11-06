@@ -19,7 +19,6 @@ struct GradeScreen: View {
     @State private var panelViewportHeight: CGFloat = 0
     @State private var drawerChrome: CGFloat = 0
     @State private var pendingCurveExpand = DebugLaunch.gradeTab == 2
-    @State private var dragStart: CGFloat? = nil
     @State private var exportOpen = DebugLaunch.exportOpen
     @State private var showLUTImporter = false
     @State private var stageSize: CGSize = .zero
@@ -46,7 +45,9 @@ struct GradeScreen: View {
     ]
     @State private var curveChannel = "RGB"
 
-    private let availableHeight: CGFloat = 852 - MMetric.safeTop - MMetric.safeBottom
+    private var availableHeight: CGFloat { insets.contentHeight }
+
+    @Environment(\.mSafeInsets) private var insets
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -71,40 +72,36 @@ struct GradeScreen: View {
                     )
                 Spacer(minLength: 0)
             }
-            .padding(.top, MMetric.safeTop)
+            .padding(.top, insets.top)
 
             drawer
-                .frame(height: drawerHeight + MMetric.safeBottom)
+                .frame(height: drawerHeight + insets.bottom)
 
             MBackSwipe(action: onBack)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-                .padding(.top, MMetric.safeTop)
-
-            if exportOpen {
-                MExportSheet(
-                    filename: session.filename,
-                    isExporting: session.isExporting,
-                    phaseLabel: session.phaseLabel,
-                    onClose: { withAnimation(MMotion.drawer) { exportOpen = false } },
-                    onReturnHome: {
-                        withAnimation(MMotion.drawer) { exportOpen = false }
-                        onGoHome()
-                    },
-                    onExport: { format, edge, done in
-                        session.export(format: format, longEdgeIndex: edge) { result in
-                            switch result {
-                            case .success:
-                                done(true)
-                            case .failure:
-                                done(false)
-                                onToast("导出失败")
-                            }
-                        }
-                    }
-                )
-            }
+                .padding(.top, insets.top)
         }
         .background(MColor.app)
+        .sheet(isPresented: $exportOpen) {
+            MExportSheet(
+                filename: session.filename,
+                isExporting: session.isExporting,
+                phaseLabel: session.exportLabel,
+                originalLongEdge: session.exportOriginalEdge,
+                canExport: session.sourceReady,
+                onClose: { exportOpen = false },
+                onReturnHome: {
+                    exportOpen = false
+                    onGoHome()
+                },
+                onExport: { format, edge, done in
+                    session.export(format: format, longEdgeIndex: edge) { result in
+                        if case .failure = result { onToast("导出失败") }
+                        done(result)
+                    }
+                }
+            )
+        }
         .overlay(alignment: .top) {
             MHousingAura(
                 housing: housing,
@@ -160,15 +157,13 @@ struct GradeScreen: View {
         withAnimation(.spring(response: 0.45, dampingFraction: 0.7)) {
             cardRect = cardTargetRect()
             cardRadius = 2
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+        } completion: {
             withAnimation(.easeOut(duration: 0.32)) {
                 cardOpacity = 0
                 imageRevealed = true
+            } completion: {
+                cardVisible = false
             }
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.82) {
-            cardVisible = false
         }
     }
 
@@ -178,7 +173,7 @@ struct GradeScreen: View {
 
     private func cardStartRect() -> CGRect {
         let width = stageSize.width
-        let top = MMetric.safeTop + MMetric.navHeight
+        let top = insets.top + MMetric.navHeight
         switch housing {
         case .notch:
             let notchWidth = width * 0.432
@@ -330,8 +325,9 @@ struct GradeScreen: View {
             .allowsHitTesting(false)
 
             VStack {
-                HStack(alignment: .top) {
+                HStack(alignment: .top, spacing: 6) {
                     Spacer()
+                    gradeScaleMenu
 
                     Button {
                         MHaptic.tick()
@@ -345,7 +341,7 @@ struct GradeScreen: View {
                             }
                         }
                     } label: {
-                        Text(zoom > 1 ? "\(Int(zoom * 100))%" : "适应")
+                        Text(zoom > 1 ? "\(Int(zoom * 100))%" : "1×")
                             .font(.mSans(9, .medium).monospacedDigit())
                             .foregroundStyle(MColor.text3)
                             .padding(.horizontal, 8)
@@ -397,6 +393,43 @@ struct GradeScreen: View {
             }
         }
         .overlay(alignment: .bottom) { MHairline(color: MColor.hairlineFaint) }
+    }
+
+    /// 调色台预览渲染比例菜单：1/8、1/4、1/2、1/1（相对 1600 交接图）。
+    private var gradeScaleMenu: some View {
+        Menu {
+            ForEach([0.125, 0.25, 0.5, 1.0], id: \.self) { value in
+                Button {
+                    MHaptic.tick()
+                    withAnimation(MMotion.state) { session.setPreviewScale(value) }
+                } label: {
+                    Text(previewScaleTitle(value))
+                }
+            }
+        } label: {
+            HStack(spacing: 3) {
+                Text(previewScaleTitle(session.previewScale))
+                    .font(.mSans(9, .medium).monospacedDigit())
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 7, weight: .semibold))
+            }
+            .foregroundStyle(MColor.text3)
+            .padding(.horizontal, 8)
+            .frame(height: 24)
+            .background(Capsule().fill(Color.black.opacity(0.5)))
+            .overlay(Capsule().strokeBorder(MColor.hairline, lineWidth: 1))
+        }
+        .accessibilityLabel("调色台预览渲染比例")
+        .accessibilityValue(previewScaleTitle(session.previewScale))
+    }
+
+    private func previewScaleTitle(_ value: Double) -> String {
+        switch value {
+        case ..<0.2: return "1/8"
+        case ..<0.4: return "1/4"
+        case ..<0.8: return "1/2"
+        default: return "1/1"
+        }
     }
 
     private var cropMarks: some View {
@@ -452,21 +485,9 @@ struct GradeScreen: View {
 
     private var drawer: some View {
         VStack(spacing: 0) {
-            MGrabber(compact: true)
-                .contentShape(Rectangle())
-                .gesture(drawerDrag)
-                .accessibilityElement()
-                .accessibilityLabel("抽屉把手")
-
-            MUnderlineTabs(
-                titles: MGradeTab.allCases.map(\.title),
-                selection: tabBinding,
-                fontSize: 11,
-                underlineWidth: 20,
-                height: 30
-            )
-            .frame(width: 210)
-            .frame(maxWidth: .infinity)
+            MDrawerChevron(isExpanded: isDrawerExpanded, isVisible: !isLockedTab) {
+                toggleDrawer()
+            }
 
             MHairline(color: MColor.hairlineFaint)
 
@@ -532,22 +553,21 @@ struct GradeScreen: View {
     }
 
     /// 面板内容或可视高度变化后，把抽屉对齐到自适应高度。
+    /// 布局回调里只赋值，不启动动画，避免 preference → 动画 → 布局的反馈环。
     private func syncDrawerToContent() {
         guard panelViewportHeight > 0, panelContentHeight > 0 else { return }
         let fit = fitHeight(for: panelContentHeight)
+        let target: CGFloat
         if pendingCurveExpand {
-            if abs(drawerHeight - fit) > 1 {
-                withAnimation(MMotion.drawer) { drawerHeight = fit }
-            } else {
-                pendingCurveExpand = false
-            }
+            target = fit
+            if abs(drawerHeight - fit) <= 1 { pendingCurveExpand = false }
         } else if isLockedTab {
-            if abs(drawerHeight - fit) > 1 {
-                withAnimation(MMotion.drawer) { drawerHeight = fit }
-            }
-        } else if drawerHeight > fit {
-            withAnimation(MMotion.drawer) { drawerHeight = fit }
+            target = fit
+        } else {
+            target = min(drawerHeight, fit)
         }
+        guard abs(drawerHeight - target) > 1 else { return }
+        drawerHeight = target
     }
 
     private var chromeHeight: CGFloat { drawerChrome }
@@ -561,38 +581,29 @@ struct GradeScreen: View {
 
     private var fitDrawerHeight: CGFloat { fitHeight(for: panelContentHeight) }
 
-    /// 内容只比一档多出一点点，展开也没有更多东西可看：只保留一个档位。
+    /// 二档判据：内容比「一档时能看到的视口」还高 → 展开有意义 → 显示 chevron。
     private var isLockedTab: Bool {
-        guard panelContentHeight > 0, panelViewportHeight > 0 else { return false }
-        return fitDrawerHeight - MMetric.drawerMin <= 120
+        guard panelContentHeight > 0 else { return true }
+        let collapsedViewport = MMetric.drawerMin - chromeHeight - 4
+        return panelContentHeight <= collapsedViewport + 24
     }
 
     private var minDrawerHeight: CGFloat {
         isLockedTab ? fitDrawerHeight : MMetric.drawerMin
     }
 
-    private var drawerDrag: some Gesture {
-        DragGesture(minimumDistance: 2)
-            .onChanged { gesture in
-                if dragStart == nil { dragStart = drawerHeight }
-                let base = dragStart ?? drawerHeight
-                drawerHeight = min(fitDrawerHeight, max(minDrawerHeight, base - gesture.translation.height))
-            }
-            .onEnded { gesture in
-                let base = dragStart ?? drawerHeight
-                let projected = base - gesture.predictedEndTranslation.height
-                let fit = fitDrawerHeight
-                let detents: [CGFloat] = isLockedTab
-                    ? [fit]
-                    : [MMetric.drawerMin, fit]
-                let target = detents.min { abs($0 - projected) < abs($1 - projected) } ?? MMetric.drawerMin
-                withAnimation(MMotion.drawer) { drawerHeight = target }
-                dragStart = nil
-            }
+    private var isDrawerExpanded: Bool {
+        drawerHeight > minDrawerHeight + 1
     }
 
-    private var tabBinding: Binding<Int> {
-        Binding(get: { tabIndex }, set: { selectTab($0) })
+    /// 点击 chevron 切换档位；曲线页由 `selectTab` 自动展开，这里只做手动两档。
+    private func toggleDrawer() {
+        guard !isLockedTab else { return }
+        if tabIndex == 2 { pendingCurveExpand = false }
+        let target = isDrawerExpanded ? minDrawerHeight : fitDrawerHeight
+        withAnimation(.spring(response: 0.42, dampingFraction: 0.78)) {
+            drawerHeight = target
+        }
     }
 
     /// 切到曲线时自动升到刚好容纳曲线内容的高度；切回其他页时恢复到进入曲线前的高度。
@@ -790,15 +801,28 @@ struct GradeScreen: View {
             VStack(alignment: .leading, spacing: 0) {
                 MSectionHead(title: "光调", trailing: "\(gradeDirtyCount) 项已调").padding(.top, 12)
 
-                MParamSlider(label: "曝光", value: $recipe.exposure, base: 0, range: -2...2, step: 0.01, decimals: 2, suffix: " EV", compact: true)
+                MParamSlider(label: "曝光", value: $recipe.exposure, base: 0, range: -5...5, step: 0.05, decimals: 2, suffix: " EV", compact: true)
                 MParamSlider(label: "对比度", value: $recipe.contrast, base: 0, range: -100...100, step: 1, decimals: 0, suffix: "", compact: true)
                 MParamSlider(label: "高光", value: $recipe.highlights, base: 0, range: -100...100, step: 1, decimals: 0, suffix: "", compact: true)
                 MParamSlider(label: "阴影", value: $recipe.shadows, base: 0, range: -100...100, step: 1, decimals: 0, suffix: "", compact: true)
+                MParamSlider(label: "白色", value: $recipe.whites, base: 0, range: -100...100, step: 1, decimals: 0, suffix: "", compact: true)
+                MParamSlider(label: "黑色", value: $recipe.blacks, base: 0, range: -100...100, step: 1, decimals: 0, suffix: "", compact: true)
+                MParamSlider(label: "中间调", value: $recipe.midtones, base: 0, range: -100...100, step: 1, decimals: 0, suffix: "", compact: true)
+                MParamSlider(label: "高光柔和", value: $recipe.highlightRolloff, base: 0, range: 0...100, step: 1, decimals: 0, suffix: "", compact: true)
 
                 MSectionHead(title: "白平衡").padding(.top, 8)
 
                 MParamSlider(label: "色温", value: $recipe.temperature, base: 0, range: -100...100, step: 1, decimals: 0, suffix: " CC", compact: true)
                 MParamSlider(label: "色调", value: $recipe.tint, base: 0, range: -100...100, step: 1, decimals: 0, suffix: " CC", compact: true)
+
+                // 引擎的 `applySaturation` / `applyVignette` / `applyGrain` 一直存在，
+                // 只是此前没有接到调色台 UI 与 `MGradeRecipe`。补上后颗粒、暗角、浓度
+                // 在调色台可用，且导出走同一份 recipe。
+                MSectionHead(title: "质感").padding(.top, 8)
+
+                MParamSlider(label: "浓度", value: $recipe.saturation, base: 0, range: -100...100, step: 1, decimals: 0, suffix: "", compact: true)
+                MParamSlider(label: "暗角", value: $recipe.vignette, base: 0, range: -100...100, step: 1, decimals: 0, suffix: "", compact: true)
+                MParamSlider(label: "颗粒", value: $recipe.grain, base: 0, range: 0...100, step: 1, decimals: 0, suffix: "", compact: true)
 
                 HStack(spacing: 8) {
                     Button {
@@ -853,6 +877,7 @@ struct GradeScreen: View {
             .background(MPanelHeightReporter())
         }
         .scrollIndicators(.never)
+        .defaultScrollAnchor(DebugLaunch.gradePanelBottom ? .bottom : .top)
     }
 
     // MARK: - 曲线
@@ -933,52 +958,46 @@ struct GradeScreen: View {
             ForEach(Array(toolItems.enumerated()), id: \.offset) { item in
                 Button {
                     MHaptic.tick()
-                    if item.offset == 3 {
-                        withAnimation(MMotion.pill) { exportOpen = true }
-                    } else {
-                        selectTab(item.offset)
-                    }
+                    selectTab(item.offset)
                 } label: {
                     VStack(spacing: 3) {
                         ZStack {
-                            if tabIndex == item.offset, item.offset < 3 {
+                            if tabIndex == item.offset {
                                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                                     .fill(MColor.brassWash)
                                     .frame(width: 34, height: 22)
                             }
                             Image(systemName: item.element.icon)
                                 .font(.system(size: 12.5, weight: .medium))
-                                .foregroundStyle(
-                                    tabIndex == item.offset && item.offset < 3 ? MColor.brass : MColor.text3
-                                )
+                                .foregroundStyle(tabIndex == item.offset ? MColor.brass : MColor.text3)
                         }
                         .frame(height: 22)
 
                         Text(item.element.title)
                             .font(.mSans(8.5, .medium))
-                            .foregroundStyle(
-                                tabIndex == item.offset && item.offset < 3 ? MColor.brass : MColor.text4
-                            )
+                            .foregroundStyle(tabIndex == item.offset ? MColor.brass : MColor.text4)
                     }
                     .frame(maxWidth: .infinity)
                     .frame(height: 46)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(item.element.title)
+                .accessibilityAddTraits(tabIndex == item.offset ? [.isSelected] : [])
             }
         }
         .padding(.horizontal, 8)
-        .padding(.bottom, MMetric.safeBottom)
+        .padding(.bottom, insets.bottom)
         .background(MColor.surface1)
         .overlay(alignment: .top) { MHairline() }
     }
 
+    /// 底部只放三个分页；导出由顶栏承担，避免同一动作出现两个入口。
     private var toolItems: [(title: String, icon: String)] {
         [
             ("预设", "rectangle.stack"),
             ("调整", "slider.horizontal.3"),
             ("曲线", "waveform.path"),
-            ("导出", "square.and.arrow.up"),
         ]
     }
 
@@ -988,8 +1007,15 @@ struct GradeScreen: View {
         if abs(recipe.contrast) > 1e-9 { count += 1 }
         if abs(recipe.highlights) > 1e-9 { count += 1 }
         if abs(recipe.shadows) > 1e-9 { count += 1 }
+        if abs(recipe.whites) > 1e-9 { count += 1 }
+        if abs(recipe.blacks) > 1e-9 { count += 1 }
+        if abs(recipe.midtones) > 1e-9 { count += 1 }
+        if abs(recipe.highlightRolloff) > 1e-9 { count += 1 }
         if abs(recipe.temperature) > 1e-9 { count += 1 }
         if abs(recipe.tint) > 1e-9 { count += 1 }
+        if abs(recipe.saturation) > 1e-9 { count += 1 }
+        if abs(recipe.vignette) > 1e-9 { count += 1 }
+        if recipe.grain > 1e-9 { count += 1 }
         if recipe.lutName != "无 LUT" { count += 1 }
         return count
     }

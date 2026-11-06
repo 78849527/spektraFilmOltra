@@ -130,64 +130,75 @@ final class SimulationPipeline {
         }
         let empty = ImageRGB(width: 0, height: 0)
         let rgbIn = keepTaps ? input : empty
-        let pre = preprocess(input)
+
+        // 全分辨率下每个整图缓冲是 293 MB（4032×3024，Double×3ch）。
+        // `keepTaps == false`（导出、预览渲染）时用 Optional 逐段释放已经用完的中间结果，
+        // 把同时存活的整图缓冲从 7 份压到 3 份；峰值内存随之下降。
+        // `keepTaps == true`（LUT 四段烘焙）必须保留，行为与改动前完全一致。
+        var pre: ImageRGB? = preprocess(input)
         advance("preprocess")
         if shouldCancel() {
-            return PipelineResult(rgbIn: rgbIn, rgbPre: keepTaps ? pre : empty,
+            return PipelineResult(rgbIn: rgbIn, rgbPre: keepTaps ? (pre ?? empty) : empty,
                                    logEFilm: empty, cmyFilm: empty,
-                                   logEPrint: nil, cmyPrint: nil, rgbOut: pre)
+                                   logEPrint: nil, cmyPrint: nil, rgbOut: pre ?? input)
         }
-        let logFilm = filming.expose(pre)
+        var logFilm: ImageRGB? = filming.expose(pre ?? input)
         advance("filming.expose")
         if shouldCancel() {
-            return PipelineResult(rgbIn: rgbIn, rgbPre: keepTaps ? pre : empty,
-                                   logEFilm: keepTaps ? logFilm : empty, cmyFilm: empty,
-                                   logEPrint: nil, cmyPrint: nil, rgbOut: pre)
+            return PipelineResult(rgbIn: rgbIn, rgbPre: keepTaps ? (pre ?? empty) : empty,
+                                   logEFilm: keepTaps ? (logFilm ?? empty) : empty, cmyFilm: empty,
+                                   logEPrint: nil, cmyPrint: nil, rgbOut: pre ?? input)
         }
-        let cmyFilm = filming.develop(logFilm)
+        if !keepTaps { pre = nil }
+        var cmyFilm: ImageRGB? = filming.develop(logFilm ?? input)
         advance("filming.develop")
         if shouldCancel() {
-            return PipelineResult(rgbIn: rgbIn, rgbPre: keepTaps ? pre : empty,
-                                   logEFilm: keepTaps ? logFilm : empty,
-                                   cmyFilm: keepTaps ? cmyFilm : empty,
-                                   logEPrint: nil, cmyPrint: nil, rgbOut: cmyFilm)
+            return PipelineResult(rgbIn: rgbIn, rgbPre: keepTaps ? (pre ?? empty) : empty,
+                                   logEFilm: keepTaps ? (logFilm ?? empty) : empty,
+                                   cmyFilm: keepTaps ? (cmyFilm ?? empty) : empty,
+                                   logEPrint: nil, cmyPrint: nil, rgbOut: cmyFilm ?? input)
         }
         if params.io.scanFilm {
-            let out = scanning.scan(densityChannels: cmyFilm).sanitizedNonFinite()
+            var out = scanning.scan(densityChannels: cmyFilm ?? input)
+            out.sanitizeNonFinite()
             advance("scanning.scan_film")
             return PipelineResult(
-                rgbIn: rgbIn, rgbPre: keepTaps ? pre : empty,
-                logEFilm: keepTaps ? logFilm : empty,
-                cmyFilm: keepTaps ? cmyFilm : empty,
+                rgbIn: rgbIn, rgbPre: keepTaps ? (pre ?? empty) : empty,
+                logEFilm: keepTaps ? (logFilm ?? empty) : empty,
+                cmyFilm: keepTaps ? (cmyFilm ?? empty) : empty,
                 logEPrint: nil, cmyPrint: nil, rgbOut: out
             )
         }
-        let logPrint = printing.expose(cmyFilmDensity: cmyFilm)
+        if !keepTaps { logFilm = nil }
+        var logPrint: ImageRGB? = printing.expose(cmyFilmDensity: cmyFilm ?? input)
         advance("printing.expose")
         if shouldCancel() {
-            return PipelineResult(rgbIn: rgbIn, rgbPre: keepTaps ? pre : empty,
-                                   logEFilm: keepTaps ? logFilm : empty,
-                                   cmyFilm: keepTaps ? cmyFilm : empty,
-                                   logEPrint: keepTaps ? logPrint : empty,
-                                   cmyPrint: nil, rgbOut: cmyFilm)
+            return PipelineResult(rgbIn: rgbIn, rgbPre: keepTaps ? (pre ?? empty) : empty,
+                                   logEFilm: keepTaps ? (logFilm ?? empty) : empty,
+                                   cmyFilm: keepTaps ? (cmyFilm ?? empty) : empty,
+                                   logEPrint: keepTaps ? (logPrint ?? empty) : empty,
+                                   cmyPrint: nil, rgbOut: cmyFilm ?? input)
         }
-        let cmyPrint = printing.develop(logRaw: logPrint)
+        if !keepTaps { cmyFilm = nil }
+        var cmyPrint: ImageRGB? = printing.develop(logRaw: logPrint ?? input)
         advance("printing.develop")
         if shouldCancel() {
-            return PipelineResult(rgbIn: rgbIn, rgbPre: keepTaps ? pre : empty,
-                                   logEFilm: keepTaps ? logFilm : empty,
-                                   cmyFilm: keepTaps ? cmyFilm : empty,
-                                   logEPrint: keepTaps ? logPrint : empty,
-                                   cmyPrint: keepTaps ? cmyPrint : empty, rgbOut: cmyPrint)
+            return PipelineResult(rgbIn: rgbIn, rgbPre: keepTaps ? (pre ?? empty) : empty,
+                                   logEFilm: keepTaps ? (logFilm ?? empty) : empty,
+                                   cmyFilm: keepTaps ? (cmyFilm ?? empty) : empty,
+                                   logEPrint: keepTaps ? (logPrint ?? empty) : empty,
+                                   cmyPrint: keepTaps ? (cmyPrint ?? empty) : empty, rgbOut: cmyPrint ?? input)
         }
-        let out = scanning.scan(densityChannels: cmyPrint).sanitizedNonFinite()
+        if !keepTaps { logPrint = nil }
+        var out = scanning.scan(densityChannels: cmyPrint ?? input)
+        out.sanitizeNonFinite()
         advance("scanning.scan_print")
         return PipelineResult(
-            rgbIn: rgbIn, rgbPre: keepTaps ? pre : empty,
-            logEFilm: keepTaps ? logFilm : empty,
-            cmyFilm: keepTaps ? cmyFilm : empty,
-            logEPrint: keepTaps ? logPrint : empty,
-            cmyPrint: keepTaps ? cmyPrint : empty, rgbOut: out
+            rgbIn: rgbIn, rgbPre: keepTaps ? (pre ?? empty) : empty,
+            logEFilm: keepTaps ? (logFilm ?? empty) : empty,
+            cmyFilm: keepTaps ? (cmyFilm ?? empty) : empty,
+            logEPrint: keepTaps ? (logPrint ?? empty) : empty,
+            cmyPrint: keepTaps ? (cmyPrint ?? empty) : empty, rgbOut: out
         )
     }
 
@@ -219,7 +230,9 @@ final class SimulationPipeline {
 
         if params.io.scanFilm {
             if collect == .rgbOut {
-                return scanning.scan(densityChannels: image).sanitizedNonFinite()
+                var out = scanning.scan(densityChannels: image)
+                out.sanitizeNonFinite()
+                return out
             }
             return image
         }
@@ -232,7 +245,9 @@ final class SimulationPipeline {
         }
 
         image = printing.develop(logRaw: image)
-        return scanning.scan(densityChannels: image).sanitizedNonFinite()
+        var out = scanning.scan(densityChannels: image)
+        out.sanitizeNonFinite()
+        return out
     }
 
     /// LUT 预览：按相机曝光补偿重算印相中灰补偿密度。

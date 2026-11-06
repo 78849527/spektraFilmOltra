@@ -271,7 +271,7 @@ enum DiffusionFilter {
                         for x in 0..<paddedWidth {
                             let sourceX = numpyReflect(x - radius, image.width)
                             padded[y * paddedWidth + x] =
-                                source[(sourceY * image.width + sourceX) * 3 + c]
+                                Double(source[(sourceY * image.width + sourceX) * 3 + c])
                         }
                     }
                     var channelKernel = [Double](repeating: 0, count: psf.count / 3)
@@ -285,7 +285,7 @@ enum DiffusionFilter {
                         for x in 0..<image.width {
                             let index = (y + radius) * paddedWidth + (x + radius)
                             let value = (1 - scatter) * padded[index] + scatter * blurred[index]
-                            destination[(y * image.width + x) * 3 + c] = value
+                            destination[(y * image.width + x) * 3 + c] = Float(value)
                         }
                     }
                 }

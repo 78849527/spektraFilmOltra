@@ -32,6 +32,8 @@ struct ParityCheck {
             try diffusionPSF(outPath: outPath)
         case "diffusion_apply":
             try diffusionApply(outPath: outPath)
+        case "halation":
+            try halation(outPath: outPath)
         case "cam16":
             try cam16(outPath: outPath)
         case "jzazbz":
@@ -171,10 +173,15 @@ struct ParityCheck {
         var delta = [Double](repeating: 0, count: 3)
         var delta2 = [Double](repeating: 0, count: 3)
         for i in 0..<(width * height) {
-            for c in 0..<3 { delta[c] += output.data[i * 3 + c] }
-            delta2[0] += output.data[i * 3] * output.data[i * 3]
-            delta2[1] += output.data[i * 3 + 1] * output.data[i * 3 + 1]
-            delta2[2] += output.data[i * 3 + 2] * output.data[i * 3 + 2]
+            let r = Double(output.data[i * 3])
+            let g = Double(output.data[i * 3 + 1])
+            let b = Double(output.data[i * 3 + 2])
+            delta[0] += r
+            delta[1] += g
+            delta[2] += b
+            delta2[0] += r * r
+            delta2[1] += g * g
+            delta2[2] += b * b
         }
         var mean = [Double](repeating: 0, count: 3)
         var std = [Double](repeating: 0, count: 3)
@@ -216,6 +223,23 @@ struct ParityCheck {
         params.strength = 0.5
         let output = DiffusionFilter.apply(image, params: params, pixelSizeUM: 20.0)
         try writeJSON(["image": output.data], to: outPath)
+    }
+
+    static func halation(outPath: String) throws {
+        let width = 5
+        let height = 5
+        var image = ImageRGB(width: width, height: height)
+        for y in 0..<height {
+            for x in 0..<width {
+                for c in 0..<3 {
+                    image.data[(y * width + x) * 3 + c] =
+                        Float(Double((x + 1) * (y + 2) * (c + 1)) / 100.0)
+                }
+            }
+        }
+        let output = SpatialEffects.halation(
+            image, params: HalationParams(), pixelSizeUM: 6.0)
+        try writeJSON(["halation": output.data.map(Double.init)], to: outPath)
     }
 
     static func cam16(outPath: String) throws {
@@ -301,7 +325,7 @@ struct ParityCheck {
                 outputColorSpace: env["OUTPUT_SPACE"] ?? "ACES2065-1"
             )
         )
-        let mean = image.data.reduce(0, +) / Double(image.data.count)
+        let mean = image.data.reduce(0) { $0 + Double($1) } / Double(image.data.count)
         try writeJSON([
             "width": image.width,
             "height": image.height,

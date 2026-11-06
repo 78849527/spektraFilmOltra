@@ -60,6 +60,21 @@ def main():
         write_json(out, {"density_cmy": [float(v) for v in np.asarray(density).ravel()]})
         return
 
+    if case == "halation":
+        from spektrafilm.model.diffusion import apply_halation_um  # noqa: E402
+        from spektrafilm.runtime.params_schema import HalationParams  # noqa: E402
+
+        width = 5
+        height = 5
+        image = np.zeros((height, width, 3), dtype=float)
+        for y in range(height):
+            for x in range(width):
+                for c in range(3):
+                    image[y, x, c] = (x + 1) * (y + 2) * (c + 1) / 100.0
+        output = apply_halation_um(image, HalationParams(), 6.0)
+        write_json(out, {"halation": [float(v) for v in np.asarray(output).ravel()]})
+        return
+
     if case == "grain_stats":
         curves = normalized_curves(film.data.density_curves)
         levels = [0.05, 0.30, 0.60, 1.00, 1.60]

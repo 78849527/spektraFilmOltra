@@ -6,7 +6,9 @@ final class SpectralLUTService {
     private var filmingTCLUT: SpectralLUT?
     private var filmingKey: [Double]?
     private var enlargerLUT: PreparedPCHIP3D?
+    private var enlargerKey: String?
     private var scannerLUT: PreparedPCHIP3D?
+    private var scannerKey: String?
 
     init(resolution: Int) {
         self.resolution = resolution
@@ -22,7 +24,9 @@ final class SpectralLUTService {
     /// 胶片/相纸或滤色片变化后需清空阶段 LUT。
     func invalidateStageLUTs() {
         enlargerLUT = nil
+        enlargerKey = nil
         scannerLUT = nil
+        scannerKey = nil
     }
 
     func getFilmingTCLUT(sensitivity: [[Double]], adaptation: Hanatos2025Adaptation) -> SpectralLUT {
@@ -50,9 +54,9 @@ final class SpectralLUTService {
                     let image = ImageRGB(width: 1, height: 1, data: [x, y, z])
                     let result = function(image)
                     let offset = ((i * steps + j) * steps + k) * 3
-                    values[offset] = result.data[0]
-                    values[offset + 1] = result.data[1]
-                    values[offset + 2] = result.data[2]
+                    values[offset] = Double(result.data[0])
+                    values[offset + 1] = Double(result.data[1])
+                    values[offset + 2] = Double(result.data[2])
                 }
             }
         }
@@ -64,29 +68,36 @@ final class SpectralLUTService {
         for p in 0..<(image.width * image.height) {
             for c in 0..<3 {
                 let range = dataMax[c] - dataMin[c]
-                output.data[p * 3 + c] = range != 0 ? (image.data[p * 3 + c] - dataMin[c]) / range : 0
+                let value = range != 0 ? (Double(image.data[p * 3 + c]) - dataMin[c]) / range : 0
+                output.data[p * 3 + c] = Float(value)
             }
         }
         return output
     }
 
     func computeEnlarger(cmyData: ImageRGB, function: (ImageRGB) -> ImageRGB,
-                        dataMin: [Double], dataMax: [Double], useLUT: Bool) -> ImageRGB {
+                        dataMin: [Double], dataMax: [Double], useLUT: Bool,
+                        key: String) -> ImageRGB {
         guard useLUT else { return function(cmyData) }
-        if enlargerLUT == nil {
+        // 放大机 LUT 的烘焙函数包含滤色片、预闪与印相曝光补偿：共享服务时
+        // 只要这些输入变了，旧表就不再生效，必须重烘，否则预览会把参数变化吃掉。
+        if enlargerLUT == nil || enlargerKey != key {
             let lut = compute3D(function: function, dataMin: dataMin, dataMax: dataMax)
             enlargerLUT = LUTInterpolation.preparePCHIP(lut)
+            enlargerKey = key
         }
         let normalized = Self.normalized(cmyData, dataMin: dataMin, dataMax: dataMax)
         return LUTInterpolation.applyPCHIP(enlargerLUT!, image: normalized)
     }
 
     func computeScanner(densityData: ImageRGB, function: (ImageRGB) -> ImageRGB,
-                        dataMin: [Double], dataMax: [Double], useLUT: Bool) -> ImageRGB {
+                        dataMin: [Double], dataMax: [Double], useLUT: Bool,
+                        key: String) -> ImageRGB {
         guard useLUT else { return function(densityData) }
-        if scannerLUT == nil {
+        if scannerLUT == nil || scannerKey != key {
             let lut = compute3D(function: function, dataMin: dataMin, dataMax: dataMax)
             scannerLUT = LUTInterpolation.preparePCHIP(lut)
+            scannerKey = key
         }
         let normalized = Self.normalized(densityData, dataMin: dataMin, dataMax: dataMax)
         return LUTInterpolation.applyPCHIP(scannerLUT!, image: normalized)

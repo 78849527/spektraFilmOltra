@@ -76,10 +76,10 @@ enum ClarityProcessors {
                     let t = max(transmission[i], 0.35)
                     let weight = strength * sky[i] * edge[i]
                     for c in 0..<3 {
-                        let value = image.data[i * 3 + c]
+                        let value = Double(image.data[i * 3 + c])
                         let air = c == 0 ? airlight.x : (c == 1 ? airlight.y : airlight.z)
                         let recovered = max((value - air) / t + air, 0)
-                        base[i * 3 + c] = value + weight * (recovered - value)
+                        base[i * 3 + c] = Float(value + weight * (recovered - value))
                     }
                 }
             }
@@ -147,9 +147,9 @@ enum ClarityProcessors {
                 ClarityMath.parallelFor(rows: image.height) { row in
                     for x in 0..<image.width {
                         let i = row * image.width + x
-                        let r = image.data[i * 3]
-                        let g = image.data[i * 3 + 1]
-                        let b = image.data[i * 3 + 2]
+                        let r = Double(image.data[i * 3])
+                        let g = Double(image.data[i * 3 + 1])
+                        let b = Double(image.data[i * 3 + 2])
                         let y = ClarityMath.luminance(r, g, b)
                         if y < 0.0005 { continue }
                         let mapped = ClarityMath.expLog(lut.sample(ClarityMath.logY(y)))
@@ -159,9 +159,9 @@ enum ClarityProcessors {
                         if maxChannel * factor > 1 {
                             factor = 1.0 / max(maxChannel, 1e-9)
                         }
-                        base[i * 3] = r * factor
-                        base[i * 3 + 1] = g * factor
-                        base[i * 3 + 2] = b * factor
+                        base[i * 3] = Float(r * factor)
+                        base[i * 3 + 1] = Float(g * factor)
+                        base[i * 3 + 2] = Float(b * factor)
                     }
                 }
             }
@@ -195,7 +195,8 @@ enum ClarityProcessors {
                 for x in 0..<image.width {
                     let i = row * image.width + x
                     let y = ClarityMath.luminance(
-                        image.data[i * 3], image.data[i * 3 + 1], image.data[i * 3 + 2]
+                        Double(image.data[i * 3]), Double(image.data[i * 3 + 1]),
+                        Double(image.data[i * 3 + 2])
                     )
                     if high ? y > 0.99 : y < 0.001 { clipped += 1 }
                 }
@@ -335,9 +336,9 @@ enum ClarityProcessors {
         )
         var output = image
         for i in 0..<(width * height) {
-            let r = image.data[i * 3]
-            let g = image.data[i * 3 + 1]
-            let b = image.data[i * 3 + 2]
+            let r = Double(image.data[i * 3])
+            let g = Double(image.data[i * 3 + 1])
+            let b = Double(image.data[i * 3 + 2])
             let y = ClarityMath.luminance(r, g, b)
             guard y > 0.0005 else { continue }
             let targetY = ClarityMath.expLog(field[i])
@@ -347,9 +348,9 @@ enum ClarityProcessors {
             if maxChannel * factor > 1 {
                 factor = 1.0 / max(maxChannel, 1e-9)
             }
-            output.data[i * 3] = r * factor
-            output.data[i * 3 + 1] = g * factor
-            output.data[i * 3 + 2] = b * factor
+            output.data[i * 3] = Float(r * factor)
+            output.data[i * 3 + 1] = Float(g * factor)
+            output.data[i * 3 + 2] = Float(b * factor)
         }
         return output
     }
@@ -381,7 +382,8 @@ enum ClarityProcessors {
             var invalid = 0
             for i in 0..<(image.width * image.height) {
                 let linear = Vec3(
-                    image.data[i * 3], image.data[i * 3 + 1], image.data[i * 3 + 2]
+                    Double(image.data[i * 3]), Double(image.data[i * 3 + 1]),
+                    Double(image.data[i * 3 + 2])
                 )
                 let lab = ClarityMath.oklab(fromLinear: linear)
                 let l = ClarityMath.clamp(lab.x, 0, 1)
@@ -410,9 +412,9 @@ enum ClarityProcessors {
                     || rgb.x > 1.02 || rgb.y > 1.02 || rgb.z > 1.02 {
                     invalid += 1
                 }
-                output.data[i * 3] = rgb.x
-                output.data[i * 3 + 1] = rgb.y
-                output.data[i * 3 + 2] = rgb.z
+                output.data[i * 3] = Float(rgb.x)
+                output.data[i * 3 + 1] = Float(rgb.y)
+                output.data[i * 3 + 2] = Float(rgb.z)
             }
             return (output, invalid)
         }
@@ -443,7 +445,8 @@ enum ClarityProcessors {
                 for x in 0..<image.width {
                     let i = row * image.width + x
                     let y = ClarityMath.luminance(
-                        image.data[i * 3], image.data[i * 3 + 1], image.data[i * 3 + 2]
+                        Double(image.data[i * 3]), Double(image.data[i * 3 + 1]),
+                        Double(image.data[i * 3 + 2])
                     )
                     base[i] = ClarityMath.logY(y)
                 }

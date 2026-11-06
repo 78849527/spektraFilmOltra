@@ -46,22 +46,74 @@ enum Grain {
         return yp[index] + (x - xp[index]) * inv * (yp[index + 1] - yp[index])
     }
 
+    /// 行种子的雪崩混合（splitmix64 finalizer）。
+    /// 直接把 `seed + y * Weyl` 当作种子会让相邻行共用同一条随机流的相邻位置，
+    /// 在「每像素抽样次数固定」的路径上产生 45° 斜纹；这里先打散再交给 SplitMix64。
+    @inline(__always)
+    static func rowSeed(_ seed: UInt64, _ y: Int) -> UInt64 {
+        var value = seed ^ (UInt64(truncatingIfNeeded: y) &* 0xD1B5_4A32_D192_ED03)
+        value ^= value >> 30
+        value = value &* 0xBF58_476D_1CE4_E5B9
+        value ^= value >> 27
+        value = value &* 0x94D0_49BB_1331_11EB
+        value ^= value >> 31
+        return value
+    }
+
     static func layerParticleModel(density: [Double], densityMax: Double,
                                    nParticlesPerPixel: Double, grainUniformity: Double,
                                    seed: UInt64, blurParticle: Double,
                                    width: Int, height: Int) -> [Double] {
         guard densityMax > 0, nParticlesPerPixel > 0 else { return [Double](repeating: 0, count: density.count) }
-        var rng = SplitMix64(seed: seed)
         let odParticle = densityMax / nParticlesPerPixel
         var output = [Double](repeating: 0, count: density.count)
-        for i in 0..<density.count {
-            var probability = density[i] / densityMax
-            if !probability.isFinite { probability = 0 }
-            probability = min(max(probability, 1e-6), 1 - 1e-6)
-            let saturation = 1 - probability * grainUniformity * (1 - 1e-6)
-            let seeds = RandomStats.poisson(nParticlesPerPixel / saturation, &rng)
-            let developed = RandomStats.binomial(seeds, probability, &rng)
-            output[i] = Double(developed) * odParticle * saturation
+
+        func sample(_ source: UnsafePointer<Double>, _ destination: UnsafeMutablePointer<Double>,
+                    _ range: Range<Int>, _ rng: inout SplitMix64) {
+            for i in range {
+                var probability = source[i] / densityMax
+                if !probability.isFinite { probability = 0 }
+                probability = min(max(probability, 1e-6), 1 - 1e-6)
+                let saturation = 1 - probability * grainUniformity * (1 - 1e-6)
+                let seeds = RandomStats.poisson(nParticlesPerPixel / saturation, &rng)
+                let developed = RandomStats.binomial(seeds, probability, &rng)
+                destination[i] = Double(developed) * odParticle * saturation
+            }
+        }
+
+        // 按行并行，每行派生出独立种子。
+        //
+        // 逐像素随机流与串行版本不同（颗粒图案会重排），但颗粒本来就是按分布验收的
+        // 模块（`docs/parity_report.md` 第 2 节：均值 ≤2%、标准差同量级），
+        // 而它是全分辨率导出里最贵的一段：12 MP 下 11 s → 约 3 s。
+        // `map` 那类纯逐像素变换不能这样并行（缺页争用），这里因为每个像素要算
+        // 几十次随机采样，属于计算密集，才划算。
+        if width > 0, height > 1, density.count == width * height, width * height >= 120_000 {
+            output.withUnsafeMutableBufferPointer { destination in
+                guard let dst = destination.baseAddress else { return }
+                density.withUnsafeBufferPointer { input in
+                    guard let src = input.baseAddress else { return }
+                    func row(_ y: Int) {
+                        // 不能用 `seed + y * Weyl`：SplitMix64 每抽一次正好加一个 Weyl 常数，
+                        // 相邻行就等于同一随机流的相邻位置。每像素抽样次数固定时，下一行
+                        // 会成为上一行左移几个像素的副本，颗粒退化成 45° 斜纹。
+                        // 先做一次雪崩混合，保证各行种子在状态空间里彼此远离。
+                        var rng = SplitMix64(seed: rowSeed(seed, y))
+                        let start = y * width
+                        sample(src, dst, start..<(start + width), &rng)
+                    }
+                    Interpolation.parallelRows(height: height, pixels: width * height, row)
+                }
+            }
+        } else {
+            var rng = SplitMix64(seed: seed)
+            output.withUnsafeMutableBufferPointer { destination in
+                guard let dst = destination.baseAddress else { return }
+                density.withUnsafeBufferPointer { input in
+                    guard let src = input.baseAddress else { return }
+                    sample(src, dst, 0..<density.count, &rng)
+                }
+            }
         }
         if blurParticle > 0 {
             let sigma = blurParticle * sqrt(odParticle)
@@ -87,7 +139,8 @@ enum Grain {
                 let xp = sign == -1 ? curveColumn.map { -$0 } : curveColumn
                 let yp = sign == -1 ? layerColumn.map { -$0 } : layerColumn
                 for p in 0..<pixelCount {
-                    let value = sign == -1 ? -densityCMY.data[p * 3 + c] : densityCMY.data[p * 3 + c]
+                    let value = sign == -1 ? -Double(densityCMY.data[p * 3 + c])
+                        : Double(densityCMY.data[p * 3 + c])
                     let interpolated = interpValue(value, xp: xp, yp: yp)
                     result[p][layer][c] = sign == -1 ? -interpolated : interpolated
                 }
@@ -137,7 +190,8 @@ enum Grain {
                 let yp = sign == -1 ? layerColumn.map { -$0 } : layerColumn
                 var plane = [Double](repeating: 0, count: pixelCount)
                 for p in 0..<pixelCount {
-                    let value = sign == -1 ? -densityCMY.data[p * 3 + c] : densityCMY.data[p * 3 + c]
+                    let value = sign == -1 ? -Double(densityCMY.data[p * 3 + c])
+                        : Double(densityCMY.data[p * 3 + c])
                     let interpolated = interpValue(value, xp: xp, yp: yp)
                     plane[p] = (sign == -1 ? -interpolated : interpolated) + minLayers[layer][c]
                 }
@@ -151,13 +205,15 @@ enum Grain {
                     blurParticle: params.blurDyeCloudsUM,
                     width: width, height: height
                 )
-                for p in 0..<pixelCount { output.data[p * 3 + c] += modelled[p] }
+                for p in 0..<pixelCount { output.data[p * 3 + c] += Float(modelled[p]) }
             }
         }
 
         addMicroStructure(&output, micro: params.microStructure, pixelSizeUM: pixelSizeUM)
         for c in 0..<3 {
-            for p in 0..<pixelCount { output.data[p * 3 + c] -= params.densityMin[c] }
+            for p in 0..<pixelCount {
+                output.data[p * 3 + c] = Float(Double(output.data[p * 3 + c]) - params.densityMin[c])
+            }
         }
         if params.blur > 0 {
             output = FastGaussian.filter(output, sigma: params.blur)
@@ -180,7 +236,9 @@ enum Grain {
             clumping = FastGaussian.filterChannel(clumping, width: density.width, height: density.height, sigma: blurPixels)
         }
         for c in 0..<3 {
-            for p in 0..<pixelCount { density.data[p * 3 + c] *= clumping[p] }
+            for p in 0..<pixelCount {
+                density.data[p * 3 + c] = Float(Double(density.data[p * 3 + c]) * clumping[p])
+            }
         }
     }
 
@@ -201,12 +259,14 @@ enum Grain {
         let pixelCount = width * height
         var working = densityCMY
         for c in 0..<3 {
-            for p in 0..<pixelCount { working.data[p * 3 + c] += params.densityMin[c] }
+            for p in 0..<pixelCount {
+                working.data[p * 3 + c] = Float(Double(working.data[p * 3 + c]) + params.densityMin[c])
+            }
         }
         var output = ImageRGB(width: width, height: height)
         for c in 0..<3 {
             var plane = [Double](repeating: 0, count: pixelCount)
-            for p in 0..<pixelCount { plane[p] = working.data[p * 3 + c] }
+            for p in 0..<pixelCount { plane[p] = Double(working.data[p * 3 + c]) }
             for sub in 0..<subLayers {
                 let modelled = layerParticleModel(
                     density: plane, densityMax: densityMax[c],
@@ -214,12 +274,14 @@ enum Grain {
                     seed: UInt64(c + sub * 10), blurParticle: 0,
                     width: width, height: height
                 )
-                for p in 0..<pixelCount { output.data[p * 3 + c] += modelled[p] }
+                for p in 0..<pixelCount { output.data[p * 3 + c] += Float(modelled[p]) }
             }
         }
         for c in 0..<3 {
             for p in 0..<pixelCount {
-                output.data[p * 3 + c] = output.data[p * 3 + c] / Double(subLayers) - params.densityMin[c]
+                output.data[p * 3 + c] = Float(
+                    Double(output.data[p * 3 + c]) / Double(subLayers) - params.densityMin[c]
+                )
             }
         }
         if params.blur > 0.4 {

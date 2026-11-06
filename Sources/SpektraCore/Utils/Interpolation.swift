@@ -10,20 +10,55 @@ enum Interpolation {
             let dx = xAxis[i + 1] - xAxis[i]
             invDX[i] = dx != 0 ? 1.0 / dx : 0
         }
-        for y in 0..<image.height {
-            for x in 0..<image.width {
-                for c in 0..<3 {
-                    let value = image[x, y, c]
-                    if value <= xAxis[0] {
-                        output[x, y, c] = yValues[0][c]
-                    } else if value >= xAxis[count - 1] {
-                        output[x, y, c] = yValues[count - 1][c]
-                    } else {
-                        var idx = 1
-                        while idx < count && xAxis[idx] <= value { idx += 1 }
-                        let low = idx - 1
-                        let t = (value - xAxis[low]) * invDX[low]
-                        output[x, y, c] = yValues[low][c] + t * (yValues[low + 1][c] - yValues[low][c])
+        var flatY = [Double](repeating: 0, count: count * 3)
+        for i in 0..<count {
+            for c in 0..<3 { flatY[i * 3 + c] = yValues[i][c] }
+        }
+
+        let width = image.width
+        let height = image.height
+        let src = image.data
+        output.data.withUnsafeMutableBufferPointer { out in
+            guard let base = out.baseAddress else { return }
+            xAxis.withUnsafeBufferPointer { axis in
+                flatY.withUnsafeBufferPointer { y in
+                    invDX.withUnsafeBufferPointer { inv in
+                        func row(_ y0: Int) {
+                            let start = y0 * width
+                            // 行首用一次二分，其后按空间连续性爬坡，通常 0–2 步。
+                            var low0 = segment(axis, count: count, value: Double(src[start * 3]))
+                            var low1 = segment(axis, count: count, value: Double(src[start * 3 + 1]))
+                            var low2 = segment(axis, count: count, value: Double(src[start * 3 + 2]))
+                            for x in 0..<width {
+                                let p = (start + x) * 3
+                                for c in 0..<3 {
+                                    let value = Double(src[p + c])
+                                    if value <= axis[0] {
+                                        base[p + c] = Float(y[c])
+                                        continue
+                                    }
+                                    if value >= axis[count - 1] {
+                                        base[p + c] = Float(y[(count - 1) * 3 + c])
+                                        continue
+                                    }
+                                    switch c {
+                                    case 0:
+                                        advance(axis, count: count, stride: 1, channel: 0,
+                                                value: value, low: &low0)
+                                        base[p] = Float(lerp(axis, y, inv, low0, 1, 0, value))
+                                    case 1:
+                                        advance(axis, count: count, stride: 1, channel: 0,
+                                                value: value, low: &low1)
+                                        base[p + 1] = Float(lerp(axis, y, inv, low1, 1, 0, value))
+                                    default:
+                                        advance(axis, count: count, stride: 1, channel: 0,
+                                                value: value, low: &low2)
+                                        base[p + 2] = Float(lerp(axis, y, inv, low2, 1, 0, value))
+                                    }
+                                }
+                            }
+                        }
+                        parallelRows(height: height, pixels: width * height, row)
                     }
                 }
             }
@@ -35,33 +70,129 @@ enum Interpolation {
         var output = image
         let count = xAxisPerChannel.count
         guard count >= 2 else { return output }
-        var invDX = [[Double]](repeating: [0, 0, 0], count: count - 1)
-        for i in 0..<(count - 1) {
+        var flatAxis = [Double](repeating: 0, count: count * 3)
+        var flatY = [Double](repeating: 0, count: count * 3)
+        var invDX = [Double](repeating: 0, count: (count - 1) * 3)
+        for i in 0..<count {
             for c in 0..<3 {
-                let dx = xAxisPerChannel[i + 1][c] - xAxisPerChannel[i][c]
-                invDX[i][c] = dx != 0 ? 1.0 / dx : 0
+                flatAxis[i * 3 + c] = xAxisPerChannel[i][c]
+                flatY[i * 3 + c] = yValues[i][c]
             }
         }
-        for y in 0..<image.height {
-            for x in 0..<image.width {
-                for c in 0..<3 {
-                    let value = image[x, y, c]
-                    if value <= xAxisPerChannel[0][c] {
-                        output[x, y, c] = yValues[0][c]
-                    } else if value >= xAxisPerChannel[count - 1][c] {
-                        output[x, y, c] = yValues[count - 1][c]
-                    } else {
-                        var idx = 1
-                        while idx < count && xAxisPerChannel[idx][c] <= value { idx += 1 }
-                        let low = idx - 1
-                        let t = (value - xAxisPerChannel[low][c]) * invDX[low][c]
-                        output[x, y, c] = yValues[low][c] + t * (yValues[low + 1][c] - yValues[low][c])
+        for i in 0..<(count - 1) {
+            for c in 0..<3 {
+                let dx = flatAxis[(i + 1) * 3 + c] - flatAxis[i * 3 + c]
+                invDX[i * 3 + c] = dx != 0 ? 1.0 / dx : 0
+            }
+        }
+
+        let width = image.width
+        let height = image.height
+        let src = image.data
+        output.data.withUnsafeMutableBufferPointer { out in
+            guard let base = out.baseAddress else { return }
+            flatAxis.withUnsafeBufferPointer { axis in
+                flatY.withUnsafeBufferPointer { y in
+                    invDX.withUnsafeBufferPointer { inv in
+                        func row(_ y0: Int) {
+                            let start = y0 * width
+                            var low0 = segmentChannel(axis, count: count, c: 0, value: Double(src[start * 3]))
+                            var low1 = segmentChannel(axis, count: count, c: 1, value: Double(src[start * 3 + 1]))
+                            var low2 = segmentChannel(axis, count: count, c: 2, value: Double(src[start * 3 + 2]))
+                            for x in 0..<width {
+                                let p = (start + x) * 3
+                                for c in 0..<3 {
+                                    let value = Double(src[p + c])
+                                    if value <= axis[c] {
+                                        base[p + c] = Float(y[c])
+                                        continue
+                                    }
+                                    if value >= axis[(count - 1) * 3 + c] {
+                                        base[p + c] = Float(y[(count - 1) * 3 + c])
+                                        continue
+                                    }
+                                    switch c {
+                                    case 0:
+                                        advance(axis, count: count, stride: 3, channel: 0,
+                                                value: value, low: &low0)
+                                        base[p] = Float(lerp(axis, y, inv, low0, 3, 0, value))
+                                    case 1:
+                                        advance(axis, count: count, stride: 3, channel: 1,
+                                                value: value, low: &low1)
+                                        base[p + 1] = Float(lerp(axis, y, inv, low1, 3, 1, value))
+                                    default:
+                                        advance(axis, count: count, stride: 3, channel: 2,
+                                                value: value, low: &low2)
+                                        base[p + 2] = Float(lerp(axis, y, inv, low2, 3, 2, value))
+                                    }
+                                }
+                            }
+                        }
+                        parallelRows(height: height, pixels: width * height, row)
                     }
                 }
             }
         }
         return output
     }
+
+    @inline(__always)
+    private static func lerp(_ axis: UnsafeBufferPointer<Double>,
+                             _ y: UnsafeBufferPointer<Double>,
+                             _ inv: UnsafeBufferPointer<Double>,
+                             _ low: Int, _ stride: Int, _ channel: Int,
+                             _ value: Double) -> Double {
+        let offset = low * 3 + channel
+        let axisOffset = low * stride + channel
+        let t = (value - axis[axisOffset]) * inv[offset]
+        return y[offset] + t * (y[offset + 3] - y[offset])
+    }
+
+
+    /// 单调轴上从上一像素的分段出发爬坡：空间连续时通常 0–2 步，结果与二分完全一致。
+    @inline(__always)
+    private static func advance(_ axis: UnsafeBufferPointer<Double>, count: Int, stride: Int,
+                                channel: Int, value: Double, low: inout Int) {
+        while low + 1 < count && axis[(low + 1) * stride + channel] <= value { low += 1 }
+        while low > 0 && axis[low * stride + channel] > value { low -= 1 }
+    }
+
+    /// 单调递增轴上的分段定位：返回满足 `axis[low] <= value < axis[low + 1]` 的 low。
+    /// 原实现从 1 开始逐点扫描，512 点曲线 × 3 通道会让每个像素退化成 ~1500 次比较。
+    @inline(__always)
+    private static func segment(_ axis: UnsafeBufferPointer<Double>, count: Int,
+                                value: Double) -> Int {
+        var lo = 1
+        var hi = count - 1
+        while lo < hi {
+            let mid = (lo + hi) >> 1
+            if axis[mid] <= value { lo = mid + 1 } else { hi = mid }
+        }
+        return lo - 1
+    }
+
+    @inline(__always)
+    private static func segmentChannel(_ axis: UnsafeBufferPointer<Double>, count: Int,
+                                       c: Int, value: Double) -> Int {
+        var lo = 1
+        var hi = count - 1
+        while lo < hi {
+            let mid = (lo + hi) >> 1
+            if axis[mid * 3 + c] <= value { lo = mid + 1 } else { hi = mid }
+        }
+        return lo - 1
+    }
+
+    /// 像素数够多时按行并行；小图保持串行，避免线程调度开销。
+    @inline(__always)
+    static func parallelRows(height: Int, pixels: Int, _ body: (Int) -> Void) {
+        if pixels >= 120_000 && height > 1 {
+            DispatchQueue.concurrentPerform(iterations: height, execute: body)
+        } else {
+            for y in 0..<height { body(y) }
+        }
+    }
+
 }
 
 struct LUT3D {

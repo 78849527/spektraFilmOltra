@@ -39,8 +39,11 @@ enum NeutralPrintFilters {
 final class EnlargerService {
     var densitySpectralMidgray: [[Double]]?
     var densitySpectralMidgrayComp: [[Double]]?
+    /// 印相补偿中灰对应的拍摄曝光（EV）。共享 SpectralLUTService 时用它判断
+    /// 已烘焙的放大机 LUT 是否还适用于当前曝光补偿。
+    var compensationEV: Double = 0
     let printExposureCompensation: Bool
-    private let params: EnlargerParams
+    let params: EnlargerParams
 
     init(params: EnlargerParams) {
         self.params = params

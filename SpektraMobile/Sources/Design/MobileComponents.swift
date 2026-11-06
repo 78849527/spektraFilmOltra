@@ -1,5 +1,38 @@
 import SwiftUI
 
+// MARK: - iOS 26 玻璃材质
+//
+// iOS 26 起浮动控件默认是 Liquid Glass。这里只在 26+ 采用系统材质，
+// 17–25 仍用原来的实心垫底——否则等于把旧观感一直带到新系统上。
+// 统一走一个 modifier，避免每处控件各写一遍 `#available`。
+
+struct MGlassSurface<S: Shape>: ViewModifier {
+    let shape: S
+    var tint: Color?
+    var fallbackFill: Color = MColor.surface2
+    var interactive: Bool = false
+
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content.glassEffect(
+                (interactive ? Glass.regular.interactive() : Glass.regular).tint(tint),
+                in: shape
+            )
+        } else {
+            content.background(shape.fill(fallbackFill))
+        }
+    }
+}
+
+extension View {
+    func mGlassSurface<S: Shape>(_ shape: S, tint: Color? = nil,
+                                 fallbackFill: Color = MColor.surface2,
+                                 interactive: Bool = false) -> some View {
+        modifier(MGlassSurface(shape: shape, tint: tint,
+                               fallbackFill: fallbackFill, interactive: interactive))
+    }
+}
+
 // MARK: - 线
 
 struct MHairline: View {
@@ -50,9 +83,10 @@ struct MCircleIconButton: View {
                 .font(.system(size: size, weight: .medium))
                 .foregroundStyle(active ? MColor.brass : MColor.text2)
                 .frame(width: frame, height: frame)
-                .background(
-                    Circle().fill(active ? MColor.brassWash : MColor.surface1)
-                )
+                .mGlassSurface(Circle(),
+                               tint: active ? MColor.brassWash : nil,
+                               fallbackFill: active ? MColor.brassWash : MColor.surface1,
+                               interactive: true)
                 .overlay(
                     Circle().strokeBorder(active ? MColor.brass.opacity(0.3) : MColor.hairline, lineWidth: 1)
                 )
@@ -103,6 +137,50 @@ struct MBrassPill: View {
         }
         .buttonStyle(MPressStyle(scale: 0.94))
         .disabled(disabled)
+    }
+}
+
+// MARK: - 导出进度
+
+/// 导出要十几秒：给「现在到哪一段 + 百分比 + 细进度条」，比禁用态胶囊上的转圈有用。
+struct MExportProgressRow: View {
+    let label: String
+    let progress: Double
+    var height: CGFloat = 46
+
+    private var clamped: Double { min(max(progress, 0), 1) }
+
+    var body: some View {
+        VStack(spacing: 8) {
+            HStack(spacing: 6) {
+                Text(label.isEmpty ? "导出中" : label)
+                    .font(.mSans(11.5, .semibold))
+                    .foregroundStyle(MColor.text1)
+                Spacer(minLength: 0)
+                Text("\(Int((clamped * 100).rounded()))%")
+                    .font(.mSans(10.5, .medium).monospacedDigit())
+                    .foregroundStyle(MColor.text3)
+            }
+            Capsule()
+                .fill(MColor.surface3)
+                .frame(height: 3)
+                .overlay(alignment: .leading) {
+                    GeometryReader { geo in
+                        Capsule()
+                            .fill(MColor.brass)
+                            .frame(width: geo.size.width * clamped)
+                            .animation(MMotion.state, value: clamped)
+                    }
+                }
+        }
+        .padding(.horizontal, 16)
+        .frame(height: height)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous).fill(MColor.surface2)
+        )
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("导出进度")
+        .accessibilityValue("\(Int((clamped * 100).rounded()))%，\(label.isEmpty ? "导出中" : label)")
     }
 }
 
@@ -241,6 +319,33 @@ struct MGrabber: View {
     }
 }
 
+/// 抽屉档位切换：点击而不是上拉。系统 chevron 自带钝角端头，命中区 44×22。
+/// 只有一个档位的页面不显示（`isVisible == false`）。
+struct MDrawerChevron: View {
+    let isExpanded: Bool
+    let isVisible: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button {
+            MHaptic.tick()
+            action()
+        } label: {
+            Image(systemName: isExpanded ? "chevron.down" : "chevron.up")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(MColor.text3)
+                .frame(width: 44, height: 22)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .opacity(isVisible ? 1 : 0)
+        .allowsHitTesting(isVisible)
+        .accessibilityHidden(!isVisible)
+        .accessibilityLabel(isExpanded ? "收起面板" : "展开面板")
+        .accessibilityAddTraits(.isButton)
+    }
+}
+
 // MARK: - 参数滑条
 
 struct MParamSlider: View {
@@ -256,9 +361,14 @@ struct MParamSlider: View {
 
     @State private var dragging = false
     @State private var lastTick: Double = 0
+    /// 按下时的锚点：值按「位移增量」换算，而不是手指的绝对位置。
+    @State private var dragStartValue: Double = 0
+    @State private var dragStartX: CGFloat = 0
 
     var body: some View {
-        VStack(spacing: compact ? 1 : 2) {
+        // 行结构：左侧标签 + 下方滑轨；标签垂直居中在「上一条滑轨底边 → 本条滑轨顶边」的间距里，
+        // 所以上方留 10、标签与滑轨之间也留 10，不贴着上一条轨道。
+        VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 6) {
                 Text(label)
                     .font(.mSans(compact ? 11 : 12.5))
@@ -269,7 +379,7 @@ struct MParamSlider: View {
                     .foregroundStyle(isDirty ? MColor.brass : MColor.text3)
                     .contentTransition(.numericText())
             }
-            .frame(height: compact ? 18 : 20)
+            .frame(height: 16, alignment: .leading)
 
             GeometryReader { geo in
                 let width = max(geo.size.width, 1)
@@ -295,41 +405,65 @@ struct MParamSlider: View {
                             Circle().strokeBorder(Color.black.opacity(0.32), lineWidth: 1)
                         )
                         .shadow(color: .black.opacity(0.38), radius: compact ? 2 : 3, y: 1)
-                        .offset(x: knobX)
+                        // 命中区只围着圆点：轨道本身不接收拖动，列表滚动不会被滑条抢走。
+                        .frame(width: knob + 28, height: 44)
+                        .contentShape(Rectangle())
+                        .offset(x: knobX - 14)
+                        .allowsHitTesting(isEnabled)
+                        .gesture(dragGesture(width: width))
                 }
                 .frame(maxHeight: .infinity)
-                .contentShape(Rectangle())
-                .gesture(
-                    DragGesture(minimumDistance: 0)
-                        .onChanged { gesture in
-                            guard isEnabled else { return }
-                            if !dragging {
-                                dragging = true
-                                MHaptic.light()
-                            }
-                            let r = min(1, max(0, gesture.location.x / width))
-                            let raw = range.lowerBound + Double(r) * (range.upperBound - range.lowerBound)
-                            let stepped = (raw / step).rounded() * step
-                            let clamped = min(range.upperBound, max(range.lowerBound, stepped))
-                            if abs(clamped - value) > 1e-9 {
-                                value = clamped
-                                if abs(clamped - lastTick) >= max(step, 1e-9) {
-                                    lastTick = clamped
-                                    MHaptic.tick()
-                                }
-                            }
-                        }
-                        .onEnded { _ in
-                            dragging = false
-                            lastTick = value
-                        }
-                )
             }
             .frame(height: compact ? 24 : 30)
             .opacity(isEnabled ? 1 : 0.4)
         }
-        .frame(height: compact ? 44 : 56)
+        .padding(.top, 10)
         .animation(MMotion.quick, value: dragging)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(label)
+        .accessibilityValue(text(for: value))
+        .accessibilityAdjustableAction { direction in
+            let delta = max(step, (range.upperBound - range.lowerBound) / 100)
+            switch direction {
+            case .increment:
+                value = min(range.upperBound, value + delta)
+            case .decrement:
+                value = max(range.lowerBound, value - delta)
+            @unknown default:
+                break
+            }
+        }
+    }
+
+    /// 相对拖动：记录按下锚点，之后只用位移增量换算，永远不会「碰到就跳值」。
+    private func dragGesture(width: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { gesture in
+                if !dragging {
+                    dragging = true
+                    dragStartValue = value
+                    dragStartX = gesture.startLocation.x
+                    lastTick = value
+                    MHaptic.light()
+                }
+                let span = range.upperBound - range.lowerBound
+                guard span > 0 else { return }
+                let delta = Double((gesture.location.x - dragStartX) / width) * span
+                let raw = dragStartValue + delta
+                let stepped = step > 0 ? (raw / step).rounded() * step : raw
+                let clamped = min(range.upperBound, max(range.lowerBound, stepped))
+                if abs(clamped - value) > 1e-9 {
+                    value = clamped
+                    if abs(clamped - lastTick) >= max(step, 1e-9) {
+                        lastTick = clamped
+                        MHaptic.tick()
+                    }
+                }
+            }
+            .onEnded { _ in
+                dragging = false
+                lastTick = value
+            }
     }
 
     private var trackHeight: CGFloat { compact ? 2.5 : 3 }
@@ -763,13 +897,13 @@ struct MColorPad: View {
             handle
                 .offset(handleOffset)
 
-            Text("品红")
+            Text("绿")
                 .font(.mSans(7, .medium))
                 .foregroundStyle(MColor.text4)
                 .frame(maxHeight: .infinity, alignment: .top)
                 .padding(.top, 4)
 
-            Text("绿")
+            Text("品红")
                 .font(.mSans(7, .medium))
                 .foregroundStyle(MColor.text4)
                 .frame(maxHeight: .infinity, alignment: .bottom)
@@ -789,7 +923,10 @@ struct MColorPad: View {
         }
         .frame(width: width, height: height)
         .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-        .gesture(
+        // 色盘在 ScrollView 里：用高优先级手势，避免纵向拖动被列表滚动抢走。
+        // y = +100（上）→ +M 滤镜 → 负片印相偏绿；y = -100（下）→ -M → 偏品红。
+        // 与盘面「上绿下品红」的标注一致（原生引擎的 M 正方向是滤色片方向，不是成片色相）。
+        .highPriorityGesture(
             DragGesture(minimumDistance: 0)
                 .onChanged { gesture in
                     x = min(100, max(-100, Double(gesture.location.x / width) * 200 - 100))
@@ -802,6 +939,22 @@ struct MColorPad: View {
                 x = 0
                 y = 0
             }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("印相色彩盘")
+        .accessibilityValue("冷暖 \(Int(x.rounded()))，绿品红 \(Int(y.rounded()))")
+        .accessibilityAdjustableAction { direction in
+            switch direction {
+            case .increment: x = min(100, x + 5)
+            case .decrement: x = max(-100, x - 5)
+            @unknown default: break
+            }
+        }
+        .accessibilityAction(named: "更绿") { y = max(-100, y - 5) }
+        .accessibilityAction(named: "更品红") { y = min(100, y + 5) }
+        .accessibilityAction(named: "回到中性") {
+            x = 0
+            y = 0
         }
     }
 
@@ -1099,82 +1252,53 @@ struct MModeCapsule: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(item.element)
+                .accessibilityAddTraits(mode == item.offset ? [.isSelected] : [])
             }
         }
         .padding(3)
-        .background(Capsule().fill(MColor.surface2.opacity(0.97)))
+        .mGlassSurface(Capsule(), fallbackFill: MColor.surface2.opacity(0.97))
         .overlay(Capsule().strokeBorder(MColor.hairlineStrong, lineWidth: 1))
         .shadow(color: .black.opacity(0.42), radius: 12, y: 5)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("模式")
     }
 }
 
 // MARK: - 轮廓漏光
 //
-// 一束柔和的黄铜漏光沿形状轮廓游走：缓入缓出（三次贝塞尔曲线）而不是匀速，
-// 每一圈从不同的位置浮现、扩散、淡出，只表示「正在处理」，不携带任何进度信息。
+// 整体轮廓的微弱「呼吸」：亮度在整圈上同步起伏，没有任何亮带沿边移动，
+// 也没有每圈的淡出与重启。只表示「正在处理」，不携带进度信息。
 
 struct MGlowSweep<S: Shape>: View {
     let shape: S
     var isActive: Bool
-    var period: Double = 2.4
-    var segment: CGFloat = 0.32
+    var period: Double = 4.2
     var coreWidth: CGFloat = 1.3
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !isActive)) { timeline in
             let elapsed = timeline.date.timeIntervalSinceReferenceDate
-            let cycle = elapsed / period
-            let lap = floor(cycle)
-            let t = CGFloat(cycle - lap)
-            let eased = easeInOut(t)
-            // 每圈起点错开一点，漏光不会总从同一个位置冒出来
-            let head = (CGFloat(lap) * 0.37 + eased).truncatingRemainder(dividingBy: 1)
-            let envelope = pow(sin(Double.pi * Double(t)), 0.55)
+            let t = (elapsed / period).truncatingRemainder(dividingBy: 1)
+            // 单圈正弦呼吸：起点与终点都停在 0.5，跨圈没有熄灭、没有跳变。
+            let breath = 0.5 + 0.5 * sin(2 * Double.pi * t)
+            // 范围 0.42–0.92：真机上「基本看不见」反馈过，抬到肉眼明确的漏光强度。
+            let envelope = 0.42 + 0.50 * breath
 
             ZStack {
-                ForEach(Array(trailRanges(head: head, length: segment).enumerated()), id: \.offset) { item in
-                    glow(from: item.element.0, to: item.element.1, envelope: envelope)
-                }
+                shape
+                    .stroke(MColor.brassHigh.opacity(0.16 * envelope), lineWidth: coreWidth * 7.0)
+                    .blur(radius: coreWidth * 7)
+                shape
+                    .stroke(MColor.brass.opacity(0.52 * envelope), lineWidth: coreWidth * 3.0)
+                    .blur(radius: coreWidth * 3)
+                shape
+                    .stroke(MColor.brassHigh.opacity(0.92 * envelope), lineWidth: coreWidth * 1.15)
             }
         }
         .opacity(isActive ? 1 : 0)
         .animation(.easeOut(duration: 0.24), value: isActive)
         .allowsHitTesting(false)
-    }
-
-    @ViewBuilder
-    private func glow(from: CGFloat, to: CGFloat, envelope: Double) -> some View {
-        if to - from > 0.0005 {
-            shape
-                .trim(from: from, to: to)
-                .stroke(MColor.brassHigh.opacity(0.16 * envelope), lineWidth: coreWidth * 5.2)
-                .blur(radius: coreWidth * 5)
-
-            shape
-                .trim(from: from, to: to)
-                .stroke(MColor.brass.opacity(0.42 * envelope), lineWidth: coreWidth * 2.2)
-                .blur(radius: coreWidth * 2.2)
-
-            shape
-                .trim(from: from, to: to)
-                .stroke(MColor.brassHigh.opacity(0.92 * envelope), lineWidth: coreWidth)
-        }
-    }
-
-    /// 漏光尾巴可以跨过 0/1 的接缝，拆成最多两段。
-    private func trailRanges(head: CGFloat, length: CGFloat) -> [(CGFloat, CGFloat)] {
-        let start = head - length
-        if start >= 0 {
-            return [(start, head)]
-        }
-        return [(0, max(0, head)), (1 + start, 1)]
-    }
-
-    /// 三次缓入缓出：两端慢、中段快，比匀速更像漏光扫过。
-    private func easeInOut(_ t: CGFloat) -> CGFloat {
-        t < 0.5
-            ? 4 * t * t * t
-            : 1 - pow(-2 * t + 2, 3) / 2
     }
 }
 
@@ -1188,55 +1312,53 @@ struct MHousingAura: View {
     let isActive: Bool
     let label: String
 
+    @Environment(\.mSafeInsets) private var insets
+
     var body: some View {
         GeometryReader { geo in
-            let width = max(1, geo.size.width)
-            let ring = housing == .notch
-                ? CGSize(width: width * 0.432, height: width * 0.432 * 0.241)
-                : CGSize(width: width * 0.336, height: width * 0.336 * 0.318)
-
+            let opening = MDeviceHousing.opening(
+                kind: housing,
+                insets: MSafeInsets(top: insets.top, bottom: insets.bottom, size: geo.size)
+            )
             ZStack(alignment: .top) {
-                if housing == .notch {
-                    MGlowSweep(
-                        shape: RoundedRectangle(cornerRadius: 48, style: .continuous).inset(by: 2),
-                        isActive: isActive,
-                        period: 3.4,
-                        segment: 0.2,
-                        coreWidth: 1
-                    )
-                    .frame(width: geo.size.width, height: geo.size.height)
-                }
-
                 if housing == .none {
                     MGlowSweep(
                         shape: Capsule().inset(by: 1),
                         isActive: isActive,
-                        period: 3.0,
-                        segment: 0.32,
+                        period: 4.2,
                         coreWidth: 1.2
                     )
-                    .frame(width: width - 44, height: 4)
+                    .frame(width: max(1, insets.width - 44), height: 4)
                     .padding(.top, 2)
                 } else {
-                    VStack(spacing: 6) {
-                        ZStack {
-                            housingShape()
-                                .stroke(Color.white.opacity(0.10), lineWidth: 1)
+                    ZStack {
+                        housingShape()
+                            .stroke(Color.white.opacity(isActive ? 0.10 : 0), lineWidth: 1)
+                            .animation(.easeOut(duration: 0.24), value: isActive)
 
-                            MGlowSweep(shape: housingShape(), isActive: isActive)
-                        }
-                        .frame(width: ring.width, height: ring.height)
+                        MGlowSweep(
+                            shape: housingShape(),
+                            isActive: isActive,
+                            period: housing == .notch ? 4.6 : 4.2,
+                            coreWidth: 1.3
+                        )
+                    }
+                    .frame(width: opening.width, height: opening.height)
+                    // 轮廓必须与真实开孔重合。此前把整个 VStack 按 `maxY` 下推，
+                    // 轮廓会被推到开孔下方，正好压住「快速 / 专业」胶囊，
+                    // 屏幕上读成两个错位的同心胶囊。
+                    .offset(y: opening.minY)
 
-                        Text(label.isEmpty ? "显影中" : label)
+                    if !label.isEmpty {
+                        Text(label)
                             .font(.mSans(9, .medium))
                             .foregroundStyle(MColor.brassHigh.opacity(0.92))
                             .shadow(color: .black.opacity(0.6), radius: 2)
                             .opacity(isActive ? 1 : 0)
                             .animation(.easeOut(duration: 0.24), value: isActive)
                             .animation(MMotion.quick, value: label)
+                            .offset(y: opening.maxY + 6)
                     }
-                    .frame(width: geo.size.width)
-                    .padding(.top, housing == .notch ? 1 : width * 0.0178)
                 }
             }
             .frame(width: geo.size.width, height: geo.size.height, alignment: .top)

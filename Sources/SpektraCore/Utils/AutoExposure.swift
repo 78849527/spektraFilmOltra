@@ -5,7 +5,8 @@ enum AutoExposure {
                           method: String) -> Double {
         var luminance = [Double](repeating: 0, count: image.width * image.height)
         for p in 0..<(image.width * image.height) {
-            let rgb = Vec3(image.data[p * 3], image.data[p * 3 + 1], image.data[p * 3 + 2])
+            let rgb = Vec3(Double(image.data[p * 3]), Double(image.data[p * 3 + 1]),
+                           Double(image.data[p * 3 + 2]))
             let xyz = ColorMath.rgbToXYZ(rgb, spaceName: colorSpace, applyCCTFDecoding: applyCCTFDecoding)
             luminance[p] = xyz.y
         }

@@ -22,6 +22,9 @@ final class FilmingStage {
         self.lutService = lutService
         self.enlargerService = enlargerService
         self.colorReference = colorReference
+        if enlargerService.printExposureCompensation {
+            enlargerService.compensationEV = camera.exposureCompensationEV
+        }
         self.lutService.inputGamutCompress = InputGamutSpec(
             active: io.inputGamutCompressActive,
             algorithm: io.inputGamutCompressAlgorithm,
@@ -40,6 +43,7 @@ final class FilmingStage {
     /// LUT 预览用：按相机曝光补偿更新印相中灰补偿密度（与 init 中的逻辑一致）。
     func updateCompensationMidgray(exposureEV: Double) {
         guard enlargerService.printExposureCompensation else { return }
+        enlargerService.compensationEV = exposureEV
         let scale = pow(2, exposureEV)
         enlargerService.densitySpectralMidgrayComp = simpleRGBToDensitySpectral(
             ImageRGB(width: 1, height: 1,

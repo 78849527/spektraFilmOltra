@@ -57,6 +57,7 @@ struct LibraryPhoto: Codable, Identifiable, Hashable {
 final class LibraryStore {
     private(set) var photos: [LibraryPhoto] = []
     let root: URL
+    private let ioQueue = DispatchQueue(label: "spektrafilm.library.io", qos: .utility)
     private var indexURL: URL { root.appendingPathComponent("index.json") }
     private var originalsURL: URL { root.appendingPathComponent("Originals", isDirectory: true) }
     private var thumbnailsURL: URL { root.appendingPathComponent("Thumbnails", isDirectory: true) }
@@ -93,12 +94,40 @@ final class LibraryStore {
         try data.write(to: indexURL)
     }
 
+    /// 参数类更新：先快照，再异步写索引。主线程不再做 JSON 编码与磁盘 IO，
+    /// 拖动滑条时每 0.7 秒一次的落盘不会再卡住手势。
+    private func persistIndexAsync() {
+        let snapshot = photos
+        let url = indexURL
+        ioQueue.async {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            guard let data = try? encoder.encode(snapshot) else { return }
+            try? data.write(to: url, options: .atomic)
+        }
+    }
+
     func originalURL(for photo: LibraryPhoto) -> URL {
-        URL(fileURLWithPath: photo.originalPath)
+        Self.resolve(photo.originalPath, root: root, folder: "Originals")
     }
 
     func thumbnailURL(for photo: LibraryPhoto) -> URL? {
-        photo.thumbnailPath.map { URL(fileURLWithPath: $0) }
+        photo.thumbnailPath.map { Self.resolve($0, root: root, folder: "Thumbnails") }
+    }
+
+    /// 索引里存相对路径（Originals/…）；老索引是绝对路径，容器目录一变就失效，
+    /// 这里按目录段重新定位，避免 App 更新后整库「找不到原图」。
+    static func resolve(_ storedPath: String, root: URL, folder: String) -> URL {
+        if storedPath.hasPrefix("/") {
+            let absolute = URL(fileURLWithPath: storedPath)
+            if FileManager.default.fileExists(atPath: absolute.path) { return absolute }
+            if let range = storedPath.range(of: "/\(folder)/") {
+                let name = String(storedPath[range.upperBound...])
+                return root.appendingPathComponent(folder).appendingPathComponent(name)
+            }
+            return absolute
+        }
+        return root.appendingPathComponent(storedPath)
     }
 
     @discardableResult
@@ -109,18 +138,25 @@ final class LibraryStore {
                           userInfo: [NSLocalizedDescriptionKey:
                             "显影台只支持 RAW，拒绝导入 \(source.lastPathComponent)"])
         }
+        let detected = ImageLoader.detectColorSpace(url: source)
+        let dimensions = Self.pixelSize(url: source)
+        // 同名 + 同尺寸视为同一张：重复导入不再产生副本（相册选取与验收脚本都会重复触发）。
+        if let existing = photos.first(where: {
+            $0.filename == source.lastPathComponent
+                && $0.width == dimensions.width && $0.height == dimensions.height
+        }) {
+            return existing
+        }
         let id = UUID().uuidString
         let destination = originalsURL.appendingPathComponent("\(id).\(ext)")
         try FileManager.default.copyItem(at: source, to: destination)
-        let detected = ImageLoader.detectColorSpace(url: source)
-        let dimensions = Self.pixelSize(url: destination)
         var edit = PhotoEdit()
         edit.io.inputColorSpace = detected.space
         edit.io.inputCCTFDecoding = detected.cctfDecoding
         let photo = LibraryPhoto(
             id: id,
             filename: source.lastPathComponent,
-            originalPath: destination.path,
+            originalPath: "Originals/\(id).\(ext)",
             thumbnailPath: nil,
             width: dimensions.width,
             height: dimensions.height,
@@ -135,16 +171,16 @@ final class LibraryStore {
     func update(_ photo: LibraryPhoto) throws {
         if let index = photos.firstIndex(where: { $0.id == photo.id }) {
             photos[index] = photo
-            try save()
+            persistIndexAsync()
         }
     }
 
     func remove(id: String) throws {
         guard let index = photos.firstIndex(where: { $0.id == id }) else { return }
         let photo = photos[index]
-        try? FileManager.default.removeItem(atPath: photo.originalPath)
+        try? FileManager.default.removeItem(at: originalURL(for: photo))
         if let thumbnail = photo.thumbnailPath {
-            try? FileManager.default.removeItem(atPath: thumbnail)
+            try? FileManager.default.removeItem(at: Self.resolve(thumbnail, root: root, folder: "Thumbnails"))
         }
         photos.remove(at: index)
         try save()
@@ -155,8 +191,8 @@ final class LibraryStore {
         let url = thumbnailsURL.appendingPathComponent("\(id).png")
         try ImageExport.save(image, to: url, bitDepth: 8,
                              colorSpace: photos[index].edit.io.outputColorSpace)
-        photos[index].thumbnailPath = url.path
-        try save()
+        photos[index].thumbnailPath = "Thumbnails/\(id).png"
+        persistIndexAsync()
     }
 
     static func pixelSize(url: URL) -> (width: Int, height: Int) {

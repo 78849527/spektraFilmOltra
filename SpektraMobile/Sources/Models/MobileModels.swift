@@ -89,10 +89,15 @@ struct MQuickGroup: Identifiable, Hashable {
     var axes: [MQuickAxis]
 }
 
+struct MProOption: Hashable {
+    let value: String
+    let label: String
+}
+
 enum MProControl: Hashable {
     case slider(value: Double, base: Double, range: ClosedRange<Double>, step: Double, decimals: Int, suffix: String)
     case toggle(isOn: Bool)
-    case choice(text: String)
+    case choice(options: [MProOption], value: String)
 }
 
 struct MProRow: Identifiable, Hashable {
@@ -137,8 +142,15 @@ struct MGradeRecipe: Equatable {
     var contrast: Double = 0
     var highlights: Double = 0
     var shadows: Double = 0
+    var whites: Double = 0
+    var blacks: Double = 0
+    var midtones: Double = 0
+    var highlightRolloff: Double = 0
     var temperature: Double = 0
     var tint: Double = 0
+    var saturation: Double = 0
+    var vignette: Double = 0
+    var grain: Double = 0
     var lutName: String = "无 LUT"
     var lutStrength: Double = 0
     var curveHighlights: Double = 0
@@ -153,12 +165,19 @@ struct MGradeRecipe: Equatable {
         recipe.light.contrast = contrast
         recipe.light.highlights = highlights
         recipe.light.shadows = shadows
+        recipe.light.whites = whites
+        recipe.light.blacks = blacks
+        recipe.light.midtones = midtones
+        recipe.light.highlightRolloff = highlightRolloff
         recipe.light.curveHighlights = curveHighlights
         recipe.light.curveLights = curveLights
         recipe.light.curveDarks = curveDarks
         recipe.light.curveShadows = curveShadows
         recipe.color.temperature = temperature
         recipe.color.tint = tint
+        recipe.color.saturation = saturation
+        recipe.optics.vignetteAmount = vignette
+        recipe.optics.grainAmount = grain
         recipe.lut.path = lutPath
         recipe.lut.strength = lutStrength
         return recipe
@@ -170,12 +189,19 @@ struct MGradeRecipe: Equatable {
         contrast = grade.light.contrast
         highlights = grade.light.highlights
         shadows = grade.light.shadows
+        whites = grade.light.whites
+        blacks = grade.light.blacks
+        midtones = grade.light.midtones
+        highlightRolloff = grade.light.highlightRolloff
         curveHighlights = grade.light.curveHighlights
         curveLights = grade.light.curveLights
         curveDarks = grade.light.curveDarks
         curveShadows = grade.light.curveShadows
         temperature = grade.color.temperature
         tint = grade.color.tint
+        saturation = grade.color.saturation
+        vignette = grade.optics.vignetteAmount
+        grain = grade.optics.grainAmount
         self.lutName = lutName
         lutStrength = grade.lut.strength
     }

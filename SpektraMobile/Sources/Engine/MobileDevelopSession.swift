@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import os
 
 /// 单张照片的显影会话：真实 RAW 解码 → 物理显影 → 双层预览（LUT 预测 + 精算）+ 参数映射 + 撤销。
 /// 只写 `PhotoEdit` 的既有字段，不改任何算法。
@@ -13,16 +14,23 @@ final class MobileDevelopSession: ObservableObject {
     @Published private(set) var isRendering = false
     @Published private(set) var phaseLabel = ""
     @Published private(set) var phaseProgress: Double = 0
+    /// 导出有独立的进度文案：预览渲染和导出共用一套 phaseLabel 会互相覆盖，
+    /// 导出面板上就会显示「胶片显影」这种预览阶段的字。
+    @Published private(set) var exportLabel = ""
+    @Published private(set) var exportProgress: Double = 0
     @Published private(set) var errorMessage: String?
     @Published private(set) var isLoaded = false
     @Published private(set) var isExporting = false
     @Published private(set) var previewAspect: CGFloat = 4.0 / 3.0
+    /// 预览渲染比例（相对原图长边）：1/8、1/4、1/2、1/1。
+    @Published private(set) var previewScale: Double
 
     @Published private(set) var quickValues: [String: Double] = [:]
     @Published private(set) var padX: Double = 0
     @Published private(set) var padY: Double = 0
     @Published private(set) var proValues: [String: Double] = [:]
     @Published private(set) var proToggles: [String: Bool] = [:]
+    @Published private(set) var proChoices: [String: String] = [:]
     @Published private(set) var filmID: String
     @Published private(set) var paperID: String
     @Published private(set) var canUndo = false
@@ -32,6 +40,8 @@ final class MobileDevelopSession: ObservableObject {
     let photoID: String
     let filename: String
     private let store: LibraryStore
+    /// 原图路径：导出与交接按需重新解码，预览不常驻全分辨率。
+    private var originalURL: URL = URL(fileURLWithPath: "/dev/null")
     /// 参数落盘后通知照片库刷新列表。
     var onPersist: ((LibraryPhoto) -> Void)?
 
@@ -66,15 +76,35 @@ final class MobileDevelopSession: ObservableObject {
     private var persistWork: DispatchWorkItem?
     private var pendingHandoffs: [(Int, (ImageRGB?) -> Void)] = []
 
-    private let previewMaxSize = 960
+    /// 原图长边（导入时写入库里的真实像素尺寸）。预览比例与导出「原始」都基于它，
+    /// 不能用预览缓冲的 1600 长边，否则 12 MP 原图会被当成 1600 长边导出。
+    private var originalLongEdge: Int
+    /// 当前解码进内存的预览图长边；调大渲染比例时需要按需重解码原图。
+    private var loadedEdge = 0
+    private static let previewScaleKey = "mobile.develop.previewScale"
+    /// 精算帧长边 = 原图长边 × 预览比例；上限由当前解码缓冲决定。
+    private var previewEdge: Int {
+        let base = originalLongEdge > 0 ? originalLongEdge : loadedEdge
+        guard base > 0 else { return 1280 }
+        return max(160, Int((Double(base) * previewScale).rounded()))
+    }
+    /// 拖动期的预测帧：与 Swift 主线一致，长边封顶 1000 px，保证跟手。
+    private var fastPreviewEdge: Int {
+        min(previewEdge, PreviewLUTService.maxPredictionEdge)
+    }
     /// 交互预测用的低分辨率查找表：33³ 只做拖动期的过渡画面，停手后仍由全精度精算替换。
     private let fastResolution = 33
-    private let settleDelay: TimeInterval = 1.0
+    /// 停手后多久回落精算帧。精算已从 1.69 s 降到 0.91 s（1280 预览），
+    /// 防抖可以从 0.5 s 收紧到 0.32 s，停手到清晰画面的总延迟从 ~2.2 s 降到 ~1.2 s。
+    private let settleDelay: TimeInterval = 0.32
 
     init(photo: LibraryPhoto, store: LibraryStore) {
         self.photoID = photo.id
         self.filename = photo.filename
         self.store = store
+        self.originalLongEdge = max(photo.width, photo.height)
+        let saved = UserDefaults.standard.double(forKey: Self.previewScaleKey)
+        self.previewScale = saved >= 0.125 && saved <= 1.0 ? saved : 0.25
         self.edit = photo.edit
         if let data = photo.quickBaselineData,
            let decoded = try? JSONDecoder().decode(PhotoEdit.self, from: data) {
@@ -111,21 +141,35 @@ final class MobileDevelopSession: ObservableObject {
         persistNow()
     }
 
+    /// 导出面板显示用：原图真实长边，避免用户再猜「原始」到底多大。
+    var exportOriginalEdge: Int {
+        originalLongEdge > 0 ? originalLongEdge : loadedEdge
+    }
+
     private func load() {
+        // 初始化按预览比例决定解码尺寸：1/4 只需 1600 内的缓冲，1/2、1/1 直接解码到原图。
+        loadOriginal(maxSize: max(1600, previewEdge))
+    }
+
+    /// 按指定长边重新解码原图并刷新预览缓冲。调大渲染比例时复用同一入口。
+    private func loadOriginal(maxSize: Int) {
         guard let photo = store.photos.first(where: { $0.id == photoID }) else {
             errorMessage = "照片不在库中"
             return
         }
         let originalURL = store.originalURL(for: photo)
+        self.originalURL = originalURL
         loadToken += 1
         let token = loadToken
-        let maxSize = previewMaxSize
+        // 比例切换时丢弃仍在途的旧尺寸精算帧，避免旧图覆盖新解码缓冲。
+        renderToken += 1
+        renderer.invalidate()
         isRendering = true
         phaseLabel = "读取 RAW"
         phaseProgress = 0
         loadQueue.async { [weak self] in
             do {
-                let loaded = try ImageLoader.load(url: originalURL)
+                let loaded = try ImageLoader.load(url: originalURL, maxSize: maxSize)
                 let preview = Resize.smallPreview(loaded.image, maxSize: maxSize)
                 let display = Self.displayImage(preview, colorSpace: loaded.colorSpace,
                                                 cctfDecoding: loaded.cctfDecoding)
@@ -133,6 +177,9 @@ final class MobileDevelopSession: ObservableObject {
                 Task { @MainActor [weak self] in
                     guard let self, self.loadToken == token else { return }
                     self.image = loaded.image
+                    self.loadedEdge = max(loaded.image.width, loaded.image.height)
+                    // 库里的宽高缺失时才退回解码缓冲的长边（此时至少能保证导出不被预览尺寸误缩）。
+                    if self.originalLongEdge <= 0 { self.originalLongEdge = self.loadedEdge }
                     self.inputColorSpace = loaded.colorSpace
                     self.inputCCTF = loaded.cctfDecoding
                     self.isLoaded = true
@@ -161,12 +208,30 @@ final class MobileDevelopSession: ObservableObject {
         }
     }
 
+    // MARK: - 渲染比例
+
+    /// 预览渲染比例：1/8、1/4、1/2、1/1（相对原图长边）。与 Swift 主线的 previewScale 一致；
+    /// 调大时按需重解码原图，调小时直接复用现有缓冲。
+    func setPreviewScale(_ scale: Double) {
+        let value = min(max(scale, 0.125), 1.0)
+        guard abs(value - previewScale) > 1e-9 else { return }
+        previewScale = value
+        UserDefaults.standard.set(value, forKey: Self.previewScaleKey)
+        let needed = previewEdge
+        if needed > loadedEdge {
+            loadOriginal(maxSize: needed)
+        } else {
+            schedulePreview(immediate: true)
+        }
+    }
+
     // MARK: - 参数映射
 
     func applyQuick(_ id: String, _ q: Double) {
         guard MobileCatalog.quickGroups.flatMap(\.axes).contains(where: { $0.id == id }) else { return }
         if id == "temperature" {
-            applyPad(x: q, y: padY)
+            // 滑条正值 = 更暖；色盘的 x 正值 = 更冷（右「冷」），两者互为相反数。
+            applyPad(x: -q, y: padY)
             return
         }
         pushUndo(key: id)
@@ -182,12 +247,14 @@ final class MobileDevelopSession: ObservableObject {
         pushUndo(key: "pad")
         padX = min(max(x, -100), 100)
         padY = min(max(y, -100), 100)
-        quickValues["temperature"] = padX
-        quickIntents["temperature"] = padX
+        quickValues["temperature"] = -padX
+        quickIntents["temperature"] = -padX
+        // 色盘满量程 = 60 CC（原生 PAD_CC_FULL_SCALE）。
+        // 纵向：上 = +M（负片印相偏绿）、下 = -M（偏品红），与盘面标注一致。
         edit.enlarger.yFilterShift = clamp(
-            baseline.enlarger.yFilterShift + 40 * padX / 100, -60, 60)
+            baseline.enlarger.yFilterShift + 60 * padX / 100, -60, 60)
         edit.enlarger.mFilterShift = clamp(
-            baseline.enlarger.mFilterShift + 40 * padY / 100, -60, 60)
+            baseline.enlarger.mFilterShift + 60 * padY / 100, -60, 60)
         edit.quickIntents = quickIntents
         persistSoon()
         schedulePreview()
@@ -206,9 +273,37 @@ final class MobileDevelopSession: ObservableObject {
         pushUndo(key: "toggle." + id)
         switch id {
         case "auto_exposure": edit.camera.autoExposure = value
+        case "print_exposure_compensation": edit.enlarger.printExposureCompensation = value
+        case "normalize_print_exposure": edit.enlarger.normalizePrintExposure = value
+        case "couplers_active": edit.filmRender.dirCouplers.active = value
+        case "camera_diffusion_active": edit.camera.diffusionFilter.active = value
+        case "enlarger_diffusion_active": edit.enlarger.diffusionFilter.active = value
+        case "print_glare_active": edit.printRender.glare.active = value
+        case "grain_active": edit.filmRender.grain.active = value
+        case "grain_sublayers_active": edit.filmRender.grain.sublayersActive = value
+        case "halation_active": edit.filmRender.halation.active = value
+        case "halation_renormalize": edit.filmRender.halation.halationRenormalize = value
+        case "film_glare_active": edit.filmRender.glare.active = value
+        case "white_correction": edit.scanner.whiteCorrection = value
+        case "black_correction": edit.scanner.blackCorrection = value
+        case "scan_film": edit.io.scanFilm = value
         default: break
         }
         proToggles[id] = value
+        persistSoon()
+        schedulePreview()
+    }
+
+    /// 专业页下拉项（测光方式、印相光源、柔光类型）。
+    func applyProChoice(_ id: String, _ value: String) {
+        pushUndo(key: "choice." + id)
+        switch id {
+        case "auto_exposure_method": edit.camera.autoExposureMethod = value
+        case "print_illuminant": edit.enlarger.illuminant = value
+        case "camera_diffusion_family": edit.camera.diffusionFilter.filterFamily = value
+        default: return
+        }
+        proChoices[id] = value
         persistSoon()
         schedulePreview()
     }
@@ -222,6 +317,12 @@ final class MobileDevelopSession: ObservableObject {
         for (control, q) in quickIntents where abs(q) > 1e-9 {
             applyQuickMapping(id: control, q: q, edit: &next)
         }
+        // 色盘纵向（品红/绿）没有对应的 quickIntents 字段，换胶片时必须从当前色盘位置恢复，
+        // 否则会被 baseline 抹掉。
+        next.enlarger.yFilterShift = clamp(
+            baseline.enlarger.yFilterShift + 60 * padX / 100, -60, 60)
+        next.enlarger.mFilterShift = clamp(
+            baseline.enlarger.mFilterShift + 60 * padY / 100, -60, 60)
         edit = next
         filmID = id
         publishFromEdit()
@@ -244,6 +345,7 @@ final class MobileDevelopSession: ObservableObject {
         edit.quickIntents = [:]
         edit.camera.exposureCompensationEV = baseline.camera.exposureCompensationEV
         edit.enlarger.printExposure = baseline.enlarger.printExposure
+        edit.enlarger.printExposureCompensation = baseline.enlarger.printExposureCompensation
         edit.enlarger.yFilterShift = baseline.enlarger.yFilterShift
         edit.enlarger.mFilterShift = baseline.enlarger.mFilterShift
         edit.printRender.densityCurvesMorph = baseline.printRender.densityCurvesMorph
@@ -286,7 +388,12 @@ final class MobileDevelopSession: ObservableObject {
             completion(.failure(MobileExportError.busy))
             return
         }
-        let requested = ExportEdge.resolve(index: longEdgeIndex, originalLongEdge: max(image.width, image.height))
+        // “原始”必须用库里记录的原图像素尺寸，而不是预览缓冲的 1600 长边。
+        // 原始档不做静默降采样；只有 2048/4096 这类显式档位才按内存余量钳位。
+        let originalEdge = originalLongEdge > 0 ? originalLongEdge : max(image.width, image.height)
+        let rawEdge = ExportEdge.requested(index: longEdgeIndex, originalLongEdge: originalEdge)
+        let requested = longEdgeIndex == 0 ? rawEdge : ExportEdge.clampToMemoryBudget(rawEdge)
+        let clampedNote = requested < rawEdge ? "导出 · 内存上限 \(requested)" : "导出"
         var params: RuntimePhotoParams
         do {
             params = try edit.runtimeParams()
@@ -319,17 +426,31 @@ final class MobileDevelopSession: ObservableObject {
         let colorSpace = params.io.outputColorSpace
         let cctf = params.io.outputCCTFEncoding
         let destination = Self.exportURL(filename: filename, ext: ext)
+        let sourceURL = originalURL
         isExporting = true
-        phaseLabel = "导出"
-        phaseProgress = 0
+        exportLabel = clampedNote
+        exportProgress = 0
         exportQueue.async { [weak self] in
-            let pipeline = SimulationPipeline(params: params, keepTaps: false)
-            let prepared = PreviewRenderer.prepared(image, maxSize: requested)
+            // 导出按目标长边重新解码原图：预览缓存是缩小版，不能拿它放大。
+            guard let loaded = try? ImageLoader.load(url: sourceURL, maxSize: requested) else {
+                Task { @MainActor [weak self] in
+                    self?.isExporting = false
+                    self?.exportLabel = ""
+                    self?.exportProgress = 0
+                    completion(.failure(MobileExportError.decodeFailed))
+                }
+                return
+            }
+            var exportParams = params
+            exportParams.io.inputColorSpace = loaded.colorSpace
+            exportParams.io.inputCCTFDecoding = loaded.cctfDecoding
+            let pipeline = SimulationPipeline(params: exportParams, keepTaps: false)
+            let prepared = PreviewRenderer.prepared(loaded.image, maxSize: requested)
             let result = pipeline.process(prepared, progress: { label, index, total in
                 Task { @MainActor [weak self] in
                     guard let self else { return }
-                    self.phaseLabel = "导出 · " + Self.stageLabel(label)
-                    self.phaseProgress = total > 0 ? Double(index) / Double(total) : 0
+                    self.exportLabel = Self.stageLabel(label)
+                    self.exportProgress = total > 0 ? Double(index) / Double(total) : 0
                 }
             })
             do {
@@ -340,16 +461,16 @@ final class MobileDevelopSession: ObservableObject {
                 Task { @MainActor [weak self] in
                     guard let self else { return }
                     self.isExporting = false
-                    self.phaseLabel = ""
-                    self.phaseProgress = 0
+                    self.exportLabel = ""
+                    self.exportProgress = 0
                     completion(.success(destination))
                 }
             } catch {
                 Task { @MainActor [weak self] in
                     guard let self else { return }
                     self.isExporting = false
-                    self.phaseLabel = ""
-                    self.phaseProgress = 0
+                    self.exportLabel = ""
+                    self.exportProgress = 0
                     completion(.failure(error))
                 }
             }
@@ -372,18 +493,34 @@ final class MobileDevelopSession: ObservableObject {
         pendingHandoffs.append((maxEdge, completion))
     }
 
-    private func renderHandoff(_ image: ImageRGB, maxEdge: Int,
+    private func renderHandoff(_ previewImage: ImageRGB, maxEdge: Int,
                                completion: @escaping (ImageRGB?) -> Void) {
-        guard var params = try? edit.runtimeParams() else {
+        guard let baseParams = try? edit.runtimeParams() else {
             completion(nil)
             return
         }
-        params.io.inputColorSpace = inputColorSpace
-        params.io.inputCCTFDecoding = inputCCTF
-        params.io.outputColorSpace = "ProPhoto RGB"
-        params.io.outputCCTFEncoding = false
-        handoffRenderer.render(params: params, image: image, maxSize: maxEdge) { outcome in
-            completion(outcome.image)
+        let renderer = handoffRenderer
+        let url = originalURL
+        let previewEdge = max(previewImage.width, previewImage.height)
+        let previewSpace = inputColorSpace
+        let previewCCTF = inputCCTF
+        loadQueue.async {
+            var params = baseParams
+            var source = previewImage
+            if maxEdge > previewEdge,
+               let loaded = try? ImageLoader.load(url: url, maxSize: maxEdge) {
+                source = loaded.image
+                params.io.inputColorSpace = loaded.colorSpace
+                params.io.inputCCTFDecoding = loaded.cctfDecoding
+            } else {
+                params.io.inputColorSpace = previewSpace
+                params.io.inputCCTFDecoding = previewCCTF
+            }
+            params.io.outputColorSpace = "ProPhoto RGB"
+            params.io.outputCCTFEncoding = false
+            renderer.render(params: params, image: source, maxSize: maxEdge) { outcome in
+                completion(outcome.image)
+            }
         }
     }
 
@@ -456,6 +593,9 @@ final class MobileDevelopSession: ObservableObject {
         guard let image, var params = try? edit.runtimeParams() else { return }
         params.io.inputColorSpace = inputColorSpace
         params.io.inputCCTFDecoding = inputCCTF
+        // 精算帧必须与导出走同一套物理参数：颗粒、眩光、清晰度都不为预览让步
+        // （原生 `controller._configure_simulation_params` 同样强制 preview_mode = False）。
+        // 任何近似层叠加都会让预览与导出的方向/质感对不上。
         renderToken += 1
         let token = renderToken
         renderInFlight = true
@@ -465,7 +605,7 @@ final class MobileDevelopSession: ObservableObject {
         renderer.render(
             params: params,
             image: image,
-            maxSize: previewMaxSize,
+            maxSize: previewEdge,
             progress: { label, index, total in
                 Task { @MainActor [weak self] in
                     guard let self, self.renderToken == token else { return }
@@ -490,16 +630,34 @@ final class MobileDevelopSession: ObservableObject {
         }
     }
 
+    /// 拖动期近似层的输入：LUT 烘焙时这些连续轴被固定在中性值，
+    /// 这里按「绝对量」补回当前强度（不是相对基线的比值，否则基线非中性时预测会偏）。
+    private func previewAdjustments() -> PreviewAdjustments.Params {
+        var p = PreviewAdjustments.Params()
+        p.yShift = edit.enlarger.yFilterShift
+        p.mShift = edit.enlarger.mFilterShift
+        p.gamma = edit.printRender.densityCurvesMorph.active
+            ? clamp(edit.printRender.densityCurvesMorph.gammaFactor, 0.5, 2.0)
+            : 1
+        p.saturation = edit.filmRender.dirCouplers.active
+            ? clamp(edit.filmRender.dirCouplers.inhibitionInterlayer, 0.35, 1.8)
+            : 1
+        p.clarity = clamp((quickIntents["scanner_clarity"] ?? 0) / 100, -1, 1)
+        return p
+    }
+
     private func startFast() {
         guard let image, var params = try? edit.runtimeParams(), !params.io.scanFilm else { return }
         params.io.inputColorSpace = inputColorSpace
         params.io.inputCCTFDecoding = inputCCTF
         let key = PreviewLUTService.cacheKey(
             edit: edit, inputColorSpace: inputColorSpace, inputCCTF: inputCCTF)
-        let source = PreviewRenderer.prepared(image, maxSize: previewMaxSize)
+        let source = PreviewRenderer.prepared(image, maxSize: fastPreviewEdge)
         let service = lutService
         let token = fastToken
         let resolution = fastResolution
+        // 交互近似参数在主线程取好，后台只做像素运算。
+        let adjustments = previewAdjustments()
         fastInFlight = true
         fastDirty = false
         lutQueue.async { [weak self] in
@@ -523,7 +681,9 @@ final class MobileDevelopSession: ObservableObject {
                 exposureEV: params.camera.exposureCompensationEV,
                 printExposure: params.enlarger.printExposure,
                 compensate: params.enlarger.printExposureCompensation)
-            let display = PreviewLUTService.displayImage(fromLinear: linear)
+            let adjusted = PreviewAdjustments.applyLinear(linear, params: adjustments)
+            let encoded = PreviewLUTService.displayImage(fromLinear: adjusted)
+            let display = PreviewAdjustments.applyDisplay(encoded, params: adjustments)
             let cgImage = PreviewRenderer.cgImage(from: display)
             Task { @MainActor [weak self] in
                 self?.finishFast(token: token, cgImage: cgImage)
@@ -553,27 +713,42 @@ final class MobileDevelopSession: ObservableObject {
         case "camera_exposure":
             edit.camera.exposureCompensationEV = clamp(
                 baseline.camera.exposureCompensationEV + q, -5, 5)
+            // 原生 quick_controls：拖动拍摄曝光时先关掉印相自动亮度补偿，
+            // 否则补偿会把曝光变化抵消掉（±1 EV 只差 0.01 L），回到 0 时恢复基线。
+            edit.enlarger.printExposureCompensation =
+                abs(q) <= 1e-9 ? baseline.enlarger.printExposureCompensation : false
         case "print_brightness":
             let b = baseline.enlarger.printExposure
-            edit.enlarger.printExposure = clamp(b * pow(2, -q), 0.125, 8)
+            edit.enlarger.printExposure = clamp(b * pow(2, -q), 0.25, 4)
         case "tonal_contrast":
             let morph = baseline.printRender.densityCurvesMorph
             edit.printRender.densityCurvesMorph.gammaFactor = clamp(
-                morph.gammaFactor * (1 + 0.35 * q / 100), 0.55, 1.8)
+                morph.gammaFactor * (1 + 0.35 * q / 100), 0.5, 2.0)
             edit.printRender.densityCurvesMorph.active = q != 0 ? true : morph.active
         case "color_density":
             let b = baseline.filmRender.dirCouplers.inhibitionInterlayer
             edit.filmRender.dirCouplers.inhibitionInterlayer = clamp(
-                b * (1 + 0.5 * q / 100), 0.5, 1.5)
+                b * (1 + 0.5 * q / 100), 0.0, 1.5)
             edit.filmRender.dirCouplers.active = q != 0 ? true : baseline.filmRender.dirCouplers.active
         case "grain_amount":
+            // 与原生 quick_controls.expected_values 对齐：强度轴只动密度地板与均匀度。
             let grain = baseline.filmRender.grain
-            let density = clamp(grain.densityMin[0] * (1 + 0.9 * q / 100), 0.005, 0.08)
-            edit.filmRender.grain.densityMin = [density, density, density]
+            let t = clamp(q / 100, -1, 1)
+            edit.filmRender.grain.densityMin = grain.densityMin.map {
+                clamp($0 * (1 + 0.9 * t), 0.005, 0.08)
+            }
             edit.filmRender.grain.uniformity = grain.uniformity.map {
-                clamp($0 - 0.06 * q / 100, 0.90, 0.995)
+                clamp($0 - 0.06 * t, 0.90, 0.995)
             }
             edit.filmRender.grain.active = q <= -99 ? false : grain.active
+        case "grain_size":
+            // 原生独立轴：颗粒面积与边缘柔化。此前把尺寸混进强度轴，
+            // 会让拉高强度时颗粒变粗、变锐，和原生不一致。
+            let grain = baseline.filmRender.grain
+            edit.filmRender.grain.particleAreaUM2 = clamp(
+                grain.particleAreaUM2 * pow(2, 0.9 * q / 100), 0.02, 0.8)
+            edit.filmRender.grain.blur = clamp(
+                grain.blur * (1 + 0.25 * q / 100), 0, 1.5)
         case "scanner_clarity":
             let scanner = baseline.scanner
             if q > 0 {
@@ -588,8 +763,10 @@ final class MobileDevelopSession: ObservableObject {
                 edit.scanner.unsharpMask = scanner.unsharpMask
             }
         case "temperature":
+            // 滑条语义：正值 = 更暖。引擎里 yFilterShift 正值偏冷，所以取负。
+            // 满量程 60 CC，与原生 PAD_CC_FULL_SCALE 一致。
             edit.enlarger.yFilterShift = clamp(
-                baseline.enlarger.yFilterShift + 40 * q / 100, -60, 60)
+                baseline.enlarger.yFilterShift - 60 * q / 100, -60, 60)
         default:
             break
         }
@@ -608,19 +785,64 @@ final class MobileDevelopSession: ObservableObject {
         case "gamma_factor_fast":
             edit.printRender.densityCurvesMorph.gammaFactorFast = value
             edit.printRender.densityCurvesMorph.active = true
+        case "gamma_factor_slow":
+            edit.printRender.densityCurvesMorph.gammaFactorSlow = value
+            edit.printRender.densityCurvesMorph.active = true
+        case "gamma_factor_red":
+            edit.printRender.densityCurvesMorph.gammaFactorRed = value
+            edit.printRender.densityCurvesMorph.active = true
+        case "gamma_factor_green":
+            edit.printRender.densityCurvesMorph.gammaFactorGreen = value
+            edit.printRender.densityCurvesMorph.active = true
+        case "gamma_factor_blue":
+            edit.printRender.densityCurvesMorph.gammaFactorBlue = value
+            edit.printRender.densityCurvesMorph.active = true
+        case "film_density_curve_gamma": edit.filmRender.densityCurveGamma = value
         case "print_y_filter_shift": edit.enlarger.yFilterShift = value
         case "print_m_filter_shift": edit.enlarger.mFilterShift = value
         case "inhibition_interlayer": edit.filmRender.dirCouplers.inhibitionInterlayer = value
+        case "inhibition_samelayer": edit.filmRender.dirCouplers.inhibitionSameLayer = value
         case "coupler_amount": edit.filmRender.dirCouplers.amount = value
         case "film_format_mm": edit.camera.filmFormatMM = value
         case "diffusion_size_um": edit.filmRender.dirCouplers.diffusionSizeUM = value
-        case "halation_amount": edit.filmRender.halation.halationAmount = value
         case "preflash_exposure": edit.enlarger.preflashExposure = value
+        case "preflash_y_filter_shift": edit.enlarger.preflashYFilterShift = value
+        case "preflash_m_filter_shift": edit.enlarger.preflashMFilterShift = value
+        case "camera_lens_blur_um": edit.camera.lensBlurUM = value
+        case "camera_diffusion_strength": edit.camera.diffusionFilter.strength = value
+        case "camera_diffusion_spatial_scale": edit.camera.diffusionFilter.spatialScale = value
+        case "camera_diffusion_halo_warmth": edit.camera.diffusionFilter.haloWarmth = value
+        case "enlarger_diffusion_strength": edit.enlarger.diffusionFilter.strength = value
+        case "enlarger_diffusion_spatial_scale": edit.enlarger.diffusionFilter.spatialScale = value
+        case "print_glare_percent": edit.printRender.glare.percent = value
+        case "print_glare_roughness": edit.printRender.glare.roughness = value
+        case "print_glare_blur": edit.printRender.glare.blur = value
+        case "film_glare_percent": edit.filmRender.glare.percent = value
+        case "film_glare_roughness": edit.filmRender.glare.roughness = value
+        case "film_glare_blur": edit.filmRender.glare.blur = value
+        case "halation_amount": edit.filmRender.halation.halationAmount = value
+        case "halation_scatter_amount": edit.filmRender.halation.scatterAmount = value
+        case "halation_scatter_scale": edit.filmRender.halation.scatterSpatialScale = value
+        case "halation_spatial_scale": edit.filmRender.halation.halationSpatialScale = value
+        case "halation_boost_ev": edit.filmRender.halation.boostEV = value
+        case "halation_boost_range": edit.filmRender.halation.boostRange = value
+        case "halation_protect_ev": edit.filmRender.halation.protectEV = value
+        case "halation_n_bounces":
+            edit.filmRender.halation.halationNBounces = max(1, Int(value.rounded()))
+        case "halation_bounce_decay": edit.filmRender.halation.halationBounceDecay = value
+        case "grain_density_min":
+            edit.filmRender.grain.densityMin = [value, value, value]
+        case "grain_uniformity":
+            edit.filmRender.grain.uniformity = [value, value, value]
+        case "grain_blur": edit.filmRender.grain.blur = value
+        case "grain_dye_clouds": edit.filmRender.grain.blurDyeCloudsUM = value
         case "scanner_unsharp_amount":
             edit.scanner.unsharpMask = [edit.scanner.unsharpMask[0], value]
         case "scanner_unsharp_sigma":
             edit.scanner.unsharpMask = [value, edit.scanner.unsharpMask[1]]
         case "scanner_lens_blur": edit.scanner.lensBlur = value
+        case "white_level": edit.scanner.whiteLevel = value
+        case "black_level": edit.scanner.blackLevel = value
         case "particle_area_um2": edit.filmRender.grain.particleAreaUM2 = value
         default: break
         }
@@ -642,18 +864,53 @@ final class MobileDevelopSession: ObservableObject {
         case "gamma_factor": return edit.printRender.densityCurvesMorph.gammaFactor
         case "developer_exhaustion": return edit.printRender.densityCurvesMorph.developerExhaustion
         case "gamma_factor_fast": return edit.printRender.densityCurvesMorph.gammaFactorFast
+        case "gamma_factor_slow": return edit.printRender.densityCurvesMorph.gammaFactorSlow
+        case "gamma_factor_red": return edit.printRender.densityCurvesMorph.gammaFactorRed
+        case "gamma_factor_green": return edit.printRender.densityCurvesMorph.gammaFactorGreen
+        case "gamma_factor_blue": return edit.printRender.densityCurvesMorph.gammaFactorBlue
+        case "film_density_curve_gamma": return edit.filmRender.densityCurveGamma
         case "print_y_filter_shift": return edit.enlarger.yFilterShift
         case "print_m_filter_shift": return edit.enlarger.mFilterShift
         case "inhibition_interlayer":
             return edit.filmRender.dirCouplers.inhibitionInterlayer
+        case "inhibition_samelayer":
+            return edit.filmRender.dirCouplers.inhibitionSameLayer
         case "coupler_amount": return edit.filmRender.dirCouplers.amount
         case "film_format_mm": return edit.camera.filmFormatMM
         case "diffusion_size_um": return edit.filmRender.dirCouplers.diffusionSizeUM
-        case "halation_amount": return edit.filmRender.halation.halationAmount
         case "preflash_exposure": return edit.enlarger.preflashExposure
+        case "preflash_y_filter_shift": return edit.enlarger.preflashYFilterShift
+        case "preflash_m_filter_shift": return edit.enlarger.preflashMFilterShift
+        case "camera_lens_blur_um": return edit.camera.lensBlurUM
+        case "camera_diffusion_strength": return edit.camera.diffusionFilter.strength
+        case "camera_diffusion_spatial_scale": return edit.camera.diffusionFilter.spatialScale
+        case "camera_diffusion_halo_warmth": return edit.camera.diffusionFilter.haloWarmth
+        case "enlarger_diffusion_strength": return edit.enlarger.diffusionFilter.strength
+        case "enlarger_diffusion_spatial_scale": return edit.enlarger.diffusionFilter.spatialScale
+        case "print_glare_percent": return edit.printRender.glare.percent
+        case "print_glare_roughness": return edit.printRender.glare.roughness
+        case "print_glare_blur": return edit.printRender.glare.blur
+        case "film_glare_percent": return edit.filmRender.glare.percent
+        case "film_glare_roughness": return edit.filmRender.glare.roughness
+        case "film_glare_blur": return edit.filmRender.glare.blur
+        case "halation_amount": return edit.filmRender.halation.halationAmount
+        case "halation_scatter_amount": return edit.filmRender.halation.scatterAmount
+        case "halation_scatter_scale": return edit.filmRender.halation.scatterSpatialScale
+        case "halation_spatial_scale": return edit.filmRender.halation.halationSpatialScale
+        case "halation_boost_ev": return edit.filmRender.halation.boostEV
+        case "halation_boost_range": return edit.filmRender.halation.boostRange
+        case "halation_protect_ev": return edit.filmRender.halation.protectEV
+        case "halation_n_bounces": return Double(edit.filmRender.halation.halationNBounces)
+        case "halation_bounce_decay": return edit.filmRender.halation.halationBounceDecay
+        case "grain_density_min": return edit.filmRender.grain.densityMin.first ?? 0.03
+        case "grain_uniformity": return edit.filmRender.grain.uniformity.first ?? 0.97
+        case "grain_blur": return edit.filmRender.grain.blur
+        case "grain_dye_clouds": return edit.filmRender.grain.blurDyeCloudsUM
         case "scanner_unsharp_amount": return edit.scanner.unsharpMask[1]
         case "scanner_unsharp_sigma": return edit.scanner.unsharpMask[0]
         case "scanner_lens_blur": return edit.scanner.lensBlur
+        case "white_level": return edit.scanner.whiteLevel
+        case "black_level": return edit.scanner.blackLevel
         case "particle_area_um2": return edit.filmRender.grain.particleAreaUM2
         default: return 0
         }
@@ -662,8 +919,35 @@ final class MobileDevelopSession: ObservableObject {
     private func proToggleValue(_ id: String) -> Bool {
         switch id {
         case "auto_exposure": return edit.camera.autoExposure
+        case "print_exposure_compensation": return edit.enlarger.printExposureCompensation
+        case "normalize_print_exposure": return edit.enlarger.normalizePrintExposure
+        case "couplers_active": return edit.filmRender.dirCouplers.active
+        case "camera_diffusion_active": return edit.camera.diffusionFilter.active
+        case "enlarger_diffusion_active": return edit.enlarger.diffusionFilter.active
+        case "print_glare_active": return edit.printRender.glare.active
+        case "grain_active": return edit.filmRender.grain.active
+        case "grain_sublayers_active": return edit.filmRender.grain.sublayersActive
+        case "halation_active": return edit.filmRender.halation.active
+        case "halation_renormalize": return edit.filmRender.halation.halationRenormalize
+        case "film_glare_active": return edit.filmRender.glare.active
+        case "white_correction": return edit.scanner.whiteCorrection
+        case "black_correction": return edit.scanner.blackCorrection
+        case "scan_film": return edit.io.scanFilm
         default: return false
         }
+    }
+
+    private func proChoiceValue(_ id: String) -> String {
+        switch id {
+        case "auto_exposure_method": return edit.camera.autoExposureMethod
+        case "print_illuminant": return edit.enlarger.illuminant
+        case "camera_diffusion_family": return edit.camera.diffusionFilter.filterFamily
+        default: return ""
+        }
+    }
+
+    func choiceValue(_ id: String) -> String {
+        proChoices[id] ?? proChoiceValue(id)
     }
 
     private func publishFromEdit() {
@@ -673,13 +957,14 @@ final class MobileDevelopSession: ObservableObject {
                 quick[axis.id] = quickIntents[axis.id] ?? axis.base
             }
         }
-        padX = clamp((edit.enlarger.yFilterShift - baseline.enlarger.yFilterShift) / 40 * 100, -100, 100)
-        padY = clamp((edit.enlarger.mFilterShift - baseline.enlarger.mFilterShift) / 40 * 100, -100, 100)
-        quick["temperature"] = padX
+        padX = clamp((edit.enlarger.yFilterShift - baseline.enlarger.yFilterShift) / 60 * 100, -100, 100)
+        padY = clamp((edit.enlarger.mFilterShift - baseline.enlarger.mFilterShift) / 60 * 100, -100, 100)
+        quick["temperature"] = -padX
         quickValues = quick
 
         var values: [String: Double] = [:]
         var toggles: [String: Bool] = [:]
+        var choices: [String: String] = [:]
         for page in MobileCatalog.proPages {
             for group in page.groups {
                 for row in group.rows {
@@ -689,13 +974,14 @@ final class MobileDevelopSession: ObservableObject {
                     case .toggle:
                         toggles[row.id] = proToggleValue(row.id)
                     case .choice:
-                        break
+                        choices[row.id] = proChoiceValue(row.id)
                     }
                 }
             }
         }
         proValues = values
         proToggles = toggles
+        proChoices = choices
         filmID = edit.filmStock
         paperID = edit.printStock
     }
@@ -792,17 +1078,39 @@ final class MobileDevelopSession: ObservableObject {
 
 enum MobileExportError: Error {
     case busy
+    case decodeFailed
 }
 
-/// 导出长边档位：0 原始、1 2048、2 4096；原始超过手机内存上限时钳位。
+/// 导出长边档位：0 原始（原图真实像素，不静默降采样）、1 2048、2 4096。
 enum ExportEdge {
-    static let cap = 4096
+    /// 单像素实测峰值：ImageRGB 改为 Float32 后，12.19 MP 全流程峰值约 1.45 GB，
+    /// 折算约 119 B/px（含阶段缓冲与工具自身持有）。乘 1.1 取 130 B/px 做安全余量。
+    private static let bytesPerPixelFootprint = 130.0
 
     static func resolve(index: Int, originalLongEdge: Int) -> Int {
+        let edge = requested(index: index, originalLongEdge: originalLongEdge)
+        // 「原始」是用户的明确选择：只按真实原图尺寸导出，不允许静默缩小。
+        return index == 0 ? edge : clampToMemoryBudget(edge)
+    }
+
+    /// 用户选定的档位换算成长边，不做内存钳位。
+    static func requested(index: Int, originalLongEdge: Int) -> Int {
         switch index {
         case 1: return min(2048, max(1, originalLongEdge))
         case 2: return min(4096, max(1, originalLongEdge))
-        default: return min(cap, max(1, originalLongEdge))
+        default: return max(1, originalLongEdge)
         }
+    }
+
+    /// 显式档位（2048/4096）按当前进程可用内存回退长边，避免把 App 撑到 jetsam。
+    /// 4:3 画幅下长边 L 的像素数 ≈ 0.75·L²；峰值 ≈ 像素数 × bytesPerPixelFootprint。
+    static func clampToMemoryBudget(_ edge: Int) -> Int {
+        let available = Int(os_proc_available_memory())
+        guard available > 0 else { return edge }
+        let budget = Double(available) * 0.60
+        let maxEdge = Int(sqrt(budget / (0.75 * bytesPerPixelFootprint)))
+        guard maxEdge > 0 else { return edge }
+        // 不要钳到 1/2 以下：宁可让系统去回收，也不要导出到几乎不可用的尺寸。
+        return max(1024, min(edge, maxEdge))
     }
 }

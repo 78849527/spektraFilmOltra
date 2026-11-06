@@ -202,116 +202,156 @@ enum OutputGamutCompression {
         let limit = knee.count > 1 ? knee[1] : 1.0
         let power = knee.count > 2 ? knee[2] : 6.0
 
+        let width = image.width
+        let height = image.height
+        let pixelCount = width * height
+        guard pixelCount > 0 else { return image }
+        let source = image.data
+
+        // 逐像素的 CAM16 / JzAzBz / Oklab 往返要算 sin、cos、pow、atan2，
+        // 是扫描阶段最重的一段。这里按行并行写进新缓冲：单像素几十次超越函数，
+        // 属于计算密集，不会像纯拷贝那样被缺页拖垮。
+        var output = [Double](repeating: 0, count: pixelCount * 3)
+
         if algorithm == "aces_rgc" {
-            var output = image
-            for i in 0..<(image.width * image.height) {
-                let r = image.data[i * 3]
-                let g = image.data[i * 3 + 1]
-                let b = image.data[i * 3 + 2]
-                guard r.isFinite, g.isFinite, b.isFinite else {
-                    output.data[i * 3] = 0
-                    output.data[i * 3 + 1] = 0
-                    output.data[i * 3 + 2] = 0
-                    continue
-                }
-                let achromatic = max(r, max(g, b))
-                if achromatic <= 1e-12 {
-                    continue
-                }
-                for c in 0..<3 {
-                    let value = image.data[i * 3 + c]
-                    let distance = (achromatic - value) / achromatic
-                    let compressed = reinhardKnee(distance, threshold: threshold, limit: limit, power: power)
-                    output.data[i * 3 + c] = achromatic * (1 - compressed)
+            output.withUnsafeMutableBufferPointer { destination in
+                guard let dst = destination.baseAddress else { return }
+                source.withUnsafeBufferPointer { input in
+                    guard let src = input.baseAddress else { return }
+                    func row(_ y: Int) {
+                        var i = y * width
+                        let end = i + width
+                        while i < end {
+                            let offset = i * 3
+                            defer { i += 1 }
+                            let r = Double(src[offset])
+                            let g = Double(src[offset + 1])
+                            let b = Double(src[offset + 2])
+                            guard r.isFinite, g.isFinite, b.isFinite else {
+                                dst[offset] = 0
+                                dst[offset + 1] = 0
+                                dst[offset + 2] = 0
+                                continue
+                            }
+                            let achromatic = max(r, max(g, b))
+                            if achromatic <= 1e-12 {
+                                dst[offset] = r
+                                dst[offset + 1] = g
+                                dst[offset + 2] = b
+                                continue
+                            }
+                            for c in 0..<3 {
+                                let value = Double(src[offset + c])
+                                let distance = (achromatic - value) / achromatic
+                                let compressed = reinhardKnee(distance, threshold: threshold,
+                                                              limit: limit, power: power)
+                                dst[offset + c] = achromatic * (1 - compressed)
+                            }
+                        }
+                    }
+                    Interpolation.parallelRows(height: height, pixels: pixelCount, row)
                 }
             }
-            return output
+            return ImageRGB(width: width, height: height, data: output)
         }
 
         guard let space = ColorDataStore.shared.spaces[outputColorSpace],
               let table = table(for: algorithm, spaceName: outputColorSpace) else {
             return image
         }
-        let white = space.whitepoint
         let whiteLevelValue = whiteLevel(kind: algorithm, spaceName: outputColorSpace)
-        let setup = algorithm == "cam16ucs" ? CAM16UCS.setup(whiteXYZ: white) : nil
+        let setup = algorithm == "cam16ucs" ? CAM16UCS.setup(whiteXYZ: space.whitepoint) : nil
 
-        var output = image
-        for i in 0..<(image.width * image.height) {
-            let rgb = Vec3(image.data[i * 3], image.data[i * 3 + 1], image.data[i * 3 + 2])
-            guard rgb.x.isFinite, rgb.y.isFinite, rgb.z.isFinite else {
-                output.data[i * 3] = 0
-                output.data[i * 3 + 1] = 0
-                output.data[i * 3 + 2] = 0
-                continue
-            }
-            let xyz = space.toXYZ.apply(rgb)
-            guard xyz.x.isFinite, xyz.y.isFinite, xyz.z.isFinite else {
-                output.data[i * 3] = 0
-                output.data[i * 3 + 1] = 0
-                output.data[i * 3 + 2] = 0
-                continue
-            }
-            var lightness: Double
-            var a: Double
-            var b: Double
-            if algorithm == "cam16ucs" {
-                let jab = CAM16UCS.xyzToJab(xyz, setup: setup!)
-                lightness = jab.x
-                a = jab.y
-                b = jab.z
-            } else if algorithm == "jzazbz" {
-                let jab = JzAzBz.xyzToJzazbz(xyz)
-                lightness = jab.x
-                a = jab.y
-                b = jab.z
-            } else {
-                let lab = xyzToOklab(xyz)
-                lightness = lab.x
-                a = lab.y
-                b = lab.z
-            }
-            guard lightness.isFinite, a.isFinite, b.isFinite else {
-                output.data[i * 3] = 0
-                output.data[i * 3 + 1] = 0
-                output.data[i * 3 + 2] = 0
-                continue
-            }
-            lightness = compressLightness(lightness, params: defaultLightness, white: whiteLevelValue)
-            if algorithm == "oklrab" { lightness = oklabLToOklrabLR(lightness) }
-            let chroma = sqrt(a * a + b * b)
-            let hue = atan2(b, a)
-            guard lightness.isFinite, chroma.isFinite, hue.isFinite else {
-                output.data[i * 3] = 0
-                output.data[i * 3 + 1] = 0
-                output.data[i * 3 + 2] = 0
-                continue
-            }
-            let cMax = max(cMaxLookup(table, l: lightness, h: hue), 1e-9)
-            let compressed = reinhardKnee(chroma / cMax, threshold: threshold, limit: limit, power: power)
-            let newChroma = compressed * cMax
-            let newA = newChroma * cos(hue)
-            let newB = newChroma * sin(hue)
-            let xyzNew: Vec3
-            if algorithm == "cam16ucs" {
-                xyzNew = CAM16UCS.jabToXYZ(Vec3(lightness, newA, newB), setup: setup!)
-            } else if algorithm == "jzazbz" {
-                xyzNew = JzAzBz.jzazbzToXYZ(Vec3(lightness, newA, newB))
-            } else {
-                let labL = algorithm == "oklrab" ? oklrabLRToOklabL(lightness) : lightness
-                xyzNew = oklabToXYZ(Vec3(labL, newA, newB))
-            }
-            let rgbNew = space.fromXYZ.apply(xyzNew)
-            if rgbNew.x.isFinite, rgbNew.y.isFinite, rgbNew.z.isFinite {
-                output.data[i * 3] = rgbNew.x
-                output.data[i * 3 + 1] = rgbNew.y
-                output.data[i * 3 + 2] = rgbNew.z
-            } else {
-                output.data[i * 3] = 0
-                output.data[i * 3 + 1] = 0
-                output.data[i * 3 + 2] = 0
+        output.withUnsafeMutableBufferPointer { destination in
+            guard let dst = destination.baseAddress else { return }
+            source.withUnsafeBufferPointer { input in
+                guard let src = input.baseAddress else { return }
+                func row(_ y: Int) {
+                    var i = y * width
+                    let end = i + width
+                    while i < end {
+                        let offset = i * 3
+                        defer { i += 1 }
+                        let rgb = Vec3(Double(src[offset]), Double(src[offset + 1]), Double(src[offset + 2]))
+                        guard rgb.x.isFinite, rgb.y.isFinite, rgb.z.isFinite else {
+                            dst[offset] = 0
+                            dst[offset + 1] = 0
+                            dst[offset + 2] = 0
+                            continue
+                        }
+                        let xyz = space.toXYZ.apply(rgb)
+                        guard xyz.x.isFinite, xyz.y.isFinite, xyz.z.isFinite else {
+                            dst[offset] = 0
+                            dst[offset + 1] = 0
+                            dst[offset + 2] = 0
+                            continue
+                        }
+                        var lightness: Double
+                        var a: Double
+                        var b: Double
+                        if algorithm == "cam16ucs", let setup {
+                            let jab = CAM16UCS.xyzToJab(xyz, setup: setup)
+                            lightness = jab.x
+                            a = jab.y
+                            b = jab.z
+                        } else if algorithm == "jzazbz" {
+                            let jab = JzAzBz.xyzToJzazbz(xyz)
+                            lightness = jab.x
+                            a = jab.y
+                            b = jab.z
+                        } else {
+                            let lab = xyzToOklab(xyz)
+                            lightness = lab.x
+                            a = lab.y
+                            b = lab.z
+                        }
+                        guard lightness.isFinite, a.isFinite, b.isFinite else {
+                            dst[offset] = 0
+                            dst[offset + 1] = 0
+                            dst[offset + 2] = 0
+                            continue
+                        }
+                        lightness = compressLightness(lightness, params: defaultLightness,
+                                                      white: whiteLevelValue)
+                        if algorithm == "oklrab" { lightness = oklabLToOklrabLR(lightness) }
+                        let chroma = sqrt(a * a + b * b)
+                        let hue = atan2(b, a)
+                        guard lightness.isFinite, chroma.isFinite, hue.isFinite else {
+                            dst[offset] = 0
+                            dst[offset + 1] = 0
+                            dst[offset + 2] = 0
+                            continue
+                        }
+                        let cMax = max(cMaxLookup(table, l: lightness, h: hue), 1e-9)
+                        let compressed = reinhardKnee(chroma / cMax, threshold: threshold,
+                                                      limit: limit, power: power)
+                        let newChroma = compressed * cMax
+                        let newA = newChroma * cos(hue)
+                        let newB = newChroma * sin(hue)
+                        let xyzNew: Vec3
+                        if algorithm == "cam16ucs", let setup {
+                            xyzNew = CAM16UCS.jabToXYZ(Vec3(lightness, newA, newB), setup: setup)
+                        } else if algorithm == "jzazbz" {
+                            xyzNew = JzAzBz.jzazbzToXYZ(Vec3(lightness, newA, newB))
+                        } else {
+                            let labL = algorithm == "oklrab" ? oklrabLRToOklabL(lightness) : lightness
+                            xyzNew = oklabToXYZ(Vec3(labL, newA, newB))
+                        }
+                        let rgbNew = space.fromXYZ.apply(xyzNew)
+                        if rgbNew.x.isFinite, rgbNew.y.isFinite, rgbNew.z.isFinite {
+                            dst[offset] = rgbNew.x
+                            dst[offset + 1] = rgbNew.y
+                            dst[offset + 2] = rgbNew.z
+                        } else {
+                            dst[offset] = 0
+                            dst[offset + 1] = 0
+                            dst[offset + 2] = 0
+                        }
+                    }
+                }
+                Interpolation.parallelRows(height: height, pixels: pixelCount, row)
             }
         }
-        return output
+        return ImageRGB(width: width, height: height, data: output)
     }
 }

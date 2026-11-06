@@ -33,36 +33,45 @@ enum MDeviceHousing {
         #endif
     }
 
+    /// 开孔矩形。
+    ///
+    /// 灵动岛是**硬件常数**（14 Pro 起各代一致）：126×37、距顶 11、水平居中。
+    /// 早先按 `top − 22` 推导，在 top = 62 的机型上会算出 136×40，比真实开孔每边大 5pt，
+    /// 光效看起来比开孔"胖一圈"。刘海则确实是随安全区变化的（13 上推导为 160×32，真值 ≈162×32）。
+    static func opening(kind: MHousingKind, insets: MSafeInsets) -> CGRect {
+        let width = max(1, insets.width)
+        switch kind {
+        case .island, .auto:
+            let islandWidth = min(126, width * 0.9)
+            return CGRect(
+                x: (width - islandWidth) / 2,
+                y: 11,
+                width: islandWidth,
+                height: 37
+            )
+        case .notch:
+            let height = max(26, insets.top - 15)
+            let notchWidth = min(height * 5.0, width * 0.45)
+            return CGRect(x: (width - notchWidth) / 2, y: 0, width: notchWidth, height: height)
+        case .none:
+            return CGRect(x: (width - 90) / 2, y: 0, width: 90, height: 3)
+        }
+    }
+
     #if os(iOS)
+    /// 只按**实测安全区高度**判断形态，不解析机型标识：
+    /// - `machineIdentifier()` 在模拟器上返回宿主架构（arm64），解析失败后被当成灵动岛，
+    ///   于是 iPhone 13 / SE 这些机型在模拟器上永远跑不到刘海/无开孔分支；
+    /// - 顶部安全区高度是系统按真实屏幕给的值：无开孔 20、刘海 44–50、灵动岛 59–62。
     private static func detect() -> MHousingKind {
         guard let scene = UIApplication.shared.connectedScenes
             .compactMap({ $0 as? UIWindowScene })
             .first,
             let window = scene.windows.first else { return .none }
-        if window.safeAreaInsets.top < 20 { return .none }
-        return hasIsland(machineIdentifier()) ? .island : .notch
-    }
-
-    /// 机型标识：iPhone15,2/15,3 起是 14 Pro 系列；iPhone16,* 起是 15 Pro 与后续机型。
-    private static func hasIsland(_ model: String) -> Bool {
-        let stripped = model.replacingOccurrences(of: "iPhone", with: "")
-        let parts = stripped.split(separator: ",")
-        guard parts.count == 2, let major = Int(parts[0]), let minor = Int(parts[1]) else {
-            return true
-        }
-        if major >= 16 { return true }
-        if major == 15 { return minor >= 2 }
-        return false
-    }
-
-    private static func machineIdentifier() -> String {
-        var info = utsname()
-        uname(&info)
-        return Mirror(reflecting: info.machine).children.reduce(into: "") { result, child in
-            if let value = child.value as? Int8, value != 0 {
-                result.append(Character(UnicodeScalar(UInt8(value))))
-            }
-        }
+        let top = window.safeAreaInsets.top
+        if top <= 20 { return .none }       // iPhone SE / 8 及更早：没有开孔
+        if top < 52 { return .notch }       // X–16e 一类的刘海
+        return .island                       // 14 Pro 起的灵动岛
     }
     #endif
 }

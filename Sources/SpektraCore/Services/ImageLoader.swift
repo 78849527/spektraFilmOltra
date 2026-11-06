@@ -56,7 +56,9 @@ enum ImageLoader {
         return properties[kCGImagePropertyProfileName as String] as? String
     }
 
-    static func load(url: URL) throws -> LoadedImage {
+    /// - Parameter maxSize: 长边上限。预览只解码到显示需要的尺寸，避免为 12MP 原图
+    ///   常驻 290MB 的双精度缓冲；导出传 nil 才是全分辨率。
+    static func load(url: URL, maxSize: Int? = nil) throws -> LoadedImage {
         let detected = detectColorSpace(url: url)
         let suffix = url.pathExtension.lowercased()
         if rejectedSuffixes.contains(suffix) {
@@ -65,12 +67,30 @@ enum ImageLoader {
                             "显影台不支持 JPEG 输入：\(url.lastPathComponent)"])
         }
         if rawSuffixes.contains(suffix) {
-            let image = try RawDecoder.decode(
-                url: url,
-                options: RawDecoder.Options(outputColorSpace: detected.space)
-            )
-            return LoadedImage(image: image, colorSpace: detected.space,
+            #if targetEnvironment(simulator)
+            // 模拟器没有相机 RAW 描述，CIRAWFilter 会永久卡在 MobileAsset 查询上，
+            // 直接走 ImageIO 的缩略图管线（已去马赛克，线性 sRGB），只用于预览与验收。
+            let image = try RawDecoder.decodeThumbnail(url: url, maxSize: maxSize ?? 4096)
+            return LoadedImage(image: image, colorSpace: "sRGB",
                                cctfDecoding: false, isRaw: true)
+            #else
+            do {
+                let image = try RawDecoder.decode(
+                    url: url,
+                    options: RawDecoder.Options(outputColorSpace: detected.space, maxSize: maxSize)
+                )
+                return LoadedImage(image: image, colorSpace: detected.space,
+                                   cctfDecoding: false, isRaw: true)
+            } catch {
+                // CIRAWFilter 打不开这张 RAW（不同机型的 ProRAW 容器差异、系统 RAW 支持缺失等）。
+                // 不让用户卡在「不支持」：退回 ImageIO 的解码结果，只降级不做拒绝，并把原因写日志。
+                NSLog("MRaw fallback %@ — %@", url.lastPathComponent,
+                      (error as NSError).localizedDescription)
+                let image = try RawDecoder.decodeThumbnail(url: url, maxSize: maxSize ?? 4096)
+                return LoadedImage(image: image, colorSpace: "sRGB",
+                                   cctfDecoding: false, isRaw: true)
+            }
+            #endif
         }
         if linearSuffixes.contains(suffix) {
             var image = try renderToImage(url: url, colorSpace: "sRGB",

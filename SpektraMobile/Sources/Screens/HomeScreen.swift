@@ -1,4 +1,5 @@
 import SwiftUI
+import PhotosUI
 import UniformTypeIdentifiers
 
 struct HomeScreen: View {
@@ -10,11 +11,12 @@ struct HomeScreen: View {
     @State private var filter: HomeFilter = .all
     @State private var sortMode: HomeSort = .recent
     @State private var actionPhoto: MPhoto?
-    @State private var showImporter = false
+    @State private var pickedItems: [PhotosPickerItem] = []
     @State private var didDebugOpen = false
     @State private var searchOpen = false
     @State private var query = ""
     @FocusState private var searchFocused: Bool
+    @Environment(\.mSafeInsets) private var insets
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -39,22 +41,11 @@ struct HomeScreen: View {
             }
         }
         .background(MColor.app)
-        .fileImporter(
-            isPresented: $showImporter,
-            allowedContentTypes: [.item],
-            allowsMultipleSelection: true
-        ) { result in
-            switch result {
-            case .success(let urls):
-                let report = engine.importPhotos(urls)
-                if report.imported > 0 {
-                    onToast("已导入 \(report.imported) 张")
-                } else if report.rejected > 0 {
-                    onToast("仅支持 RAW 文件")
-                }
-            case .failure:
-                onToast("导入失败")
-            }
+        .onChange(of: pickedItems) { _, items in
+            guard !items.isEmpty else { return }
+            let batch = items
+            pickedItems = []
+            Task { await importPicked(batch) }
         }
         .task {
             guard !didDebugOpen else { return }
@@ -67,8 +58,74 @@ struct HomeScreen: View {
 
     // MARK: - 顶部
 
+    /// 相册选择结果落到临时文件再入库：`LibraryStore` 只接受带扩展名的 RAW。
+    private func importPicked(_ items: [PhotosPickerItem]) async {
+        var urls: [URL] = []
+        for item in items {
+            guard let data = try? await item.loadTransferable(type: Data.self) else { continue }
+            // 相册对 ProRAW 报的 UTI 不一定带 raw 族（实测同一台机器上，
+            // 13 Pro Max 的 DNG 会被报成 `public.tiff`，16 的报成 DNG）。
+            // 于是先用 UTI 取扩展名，再按文件头兜底：TIFF 家族（II*\0 / MM\0*）一律按 dng 落盘。
+            let rawType = item.supportedContentTypes.first(where: { $0.conforms(to: .rawImage) })
+            var ext = rawType?.preferredFilenameExtension
+                ?? item.supportedContentTypes.first?.preferredFilenameExtension
+                ?? "dng"
+            if rawType == nil, Self.looksLikeTIFF(data), !ImageLoader.rawSuffixes.contains(ext.lowercased()) {
+                ext = "dng"
+            }
+            NSLog("MImport types=%@ ext=%@ bytes=%d magic=%@",
+                  item.supportedContentTypes.map(\.identifier).joined(separator: ","),
+                  ext, data.count, Self.magicHex(data))
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString)
+                .appendingPathExtension(ext)
+            do {
+                try data.write(to: url)
+                urls.append(url)
+            } catch {
+                continue
+            }
+        }
+        guard !urls.isEmpty else {
+            onToast("相册里没有可导入的 RAW")
+            return
+        }
+        let report = engine.importPhotos(urls)
+        for url in urls { try? FileManager.default.removeItem(at: url) }
+        if report.imported > 0 {
+            onToast("已导入 \(report.imported) 张")
+        } else {
+            onToast(report.reason.isEmpty ? "仅支持 RAW 文件" : report.reason)
+        }
+    }
+
+    private static func looksLikeTIFF(_ data: Data) -> Bool {
+        guard data.count >= 4 else { return false }
+        let head = Array(data.prefix(4))
+        return (head[0] == 0x49 && head[1] == 0x49 && head[2] == 0x2A && head[3] == 0x00)
+            || (head[0] == 0x4D && head[1] == 0x4D && head[2] == 0x00 && head[3] == 0x2A)
+    }
+
+    private static func magicHex(_ data: Data) -> String {
+        data.prefix(4).map { String(format: "%02X", $0) }.joined()
+    }
+
     private var header: some View {
         VStack(alignment: .leading, spacing: 0) {
+            // 品牌字标落在开孔正下方居中：位置由真实安全区推导，刘海 / 灵动岛 / 无开孔三种形态都成立。
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(MColor.brass)
+                    .frame(width: 4, height: 4)
+                Text("SPEKTRAFILM")
+                    .font(.mSans(8, .semibold))
+                    .tracking(2.0)
+                    .foregroundStyle(MColor.text4)
+            }
+            .frame(maxWidth: .infinity, alignment: .center)
+            .padding(.top, 2)
+            .padding(.bottom, 10)
+
             HStack(alignment: .center, spacing: 10) {
                 if searchOpen {
                     HStack(spacing: 8) {
@@ -139,21 +196,11 @@ struct HomeScreen: View {
                     .mMeta(10, color: MColor.text3)
 
                 Spacer(minLength: 0)
-
-                HStack(spacing: 5) {
-                    Circle()
-                        .fill(MColor.brass)
-                        .frame(width: 4, height: 4)
-                    Text("SPEKTRAFILM")
-                        .font(.mSans(8, .semibold))
-                        .tracking(2.0)
-                        .foregroundStyle(MColor.text4)
-                }
             }
             .padding(.top, 4)
         }
         .padding(.horizontal, MMetric.pageMargin)
-        .padding(.top, MMetric.safeTop + 8)
+        .padding(.top, insets.top + 8)
         .padding(.bottom, 12)
     }
 
@@ -282,10 +329,12 @@ struct HomeScreen: View {
                 }
             }
 
-            Button {
-                MHaptic.medium()
-                showImporter = true
-            } label: {
+            PhotosPicker(
+                selection: $pickedItems,
+                maxSelectionCount: 12,
+                matching: .images,
+                photoLibrary: .shared()
+            ) {
                 HStack(spacing: 6) {
                     Image(systemName: "plus")
                         .font(.system(size: 12, weight: .semibold))
@@ -302,7 +351,7 @@ struct HomeScreen: View {
         }
         .padding(.horizontal, MMetric.pageMargin)
         .padding(.top, 10)
-        .padding(.bottom, MMetric.safeBottom)
+        .padding(.bottom, insets.bottom)
         .background(
             LinearGradient(
                 colors: [MColor.app.opacity(0), MColor.app.opacity(0.94), MColor.app],
@@ -407,7 +456,7 @@ struct HomeScreen: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .padding(.bottom, MMetric.safeBottom + 4)
+                .padding(.bottom, insets.bottom + 4)
             }
             .background(MColor.surface1)
             .clipShape(

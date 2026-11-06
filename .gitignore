@@ -4,3 +4,6 @@ DerivedData/
 *.dmg
 .DS_Store
 .scratch/
+.screenshots/
+out-*.png
+**/xcuserdata/
