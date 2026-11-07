@@ -45,15 +45,17 @@ enum Interpolation {
                                     case 0:
                                         advance(axis, count: count, stride: 1, channel: 0,
                                                 value: value, low: &low0)
-                                        base[p] = Float(lerp(axis, y, inv, low0, 1, 0, value))
+                                        base[p] = Float(lerp(axis, y, inv, low0, low0 * 3, low0, value))
                                     case 1:
                                         advance(axis, count: count, stride: 1, channel: 0,
                                                 value: value, low: &low1)
-                                        base[p + 1] = Float(lerp(axis, y, inv, low1, 1, 0, value))
+                                        base[p + 1] = Float(lerp(axis, y, inv, low1, low1 * 3 + 1,
+                                                                low1, value))
                                     default:
                                         advance(axis, count: count, stride: 1, channel: 0,
                                                 value: value, low: &low2)
-                                        base[p + 2] = Float(lerp(axis, y, inv, low2, 1, 0, value))
+                                        base[p + 2] = Float(lerp(axis, y, inv, low2, low2 * 3 + 2,
+                                                                low2, value))
                                     }
                                 }
                             }
@@ -115,15 +117,18 @@ enum Interpolation {
                                     case 0:
                                         advance(axis, count: count, stride: 3, channel: 0,
                                                 value: value, low: &low0)
-                                        base[p] = Float(lerp(axis, y, inv, low0, 3, 0, value))
+                                        base[p] = Float(lerp(axis, y, inv, low0 * 3, low0 * 3,
+                                                            low0 * 3, value))
                                     case 1:
                                         advance(axis, count: count, stride: 3, channel: 1,
                                                 value: value, low: &low1)
-                                        base[p + 1] = Float(lerp(axis, y, inv, low1, 3, 1, value))
+                                        base[p + 1] = Float(lerp(axis, y, inv, low1 * 3 + 1,
+                                                                low1 * 3 + 1, low1 * 3 + 1, value))
                                     default:
                                         advance(axis, count: count, stride: 3, channel: 2,
                                                 value: value, low: &low2)
-                                        base[p + 2] = Float(lerp(axis, y, inv, low2, 3, 2, value))
+                                        base[p + 2] = Float(lerp(axis, y, inv, low2 * 3 + 2,
+                                                                low2 * 3 + 2, low2 * 3 + 2, value))
                                     }
                                 }
                             }
@@ -140,12 +145,12 @@ enum Interpolation {
     private static func lerp(_ axis: UnsafeBufferPointer<Double>,
                              _ y: UnsafeBufferPointer<Double>,
                              _ inv: UnsafeBufferPointer<Double>,
-                             _ low: Int, _ stride: Int, _ channel: Int,
+                             _ axisIndex: Int, _ yIndex: Int, _ invIndex: Int,
                              _ value: Double) -> Double {
-        let offset = low * 3 + channel
-        let axisOffset = low * stride + channel
-        let t = (value - axis[axisOffset]) * inv[offset]
-        return y[offset] + t * (y[offset + 3] - y[offset])
+        // 三个缓冲的布局各不相同：轴可能是单通道（stride 1）或逐通道（stride 3），
+        // y 恒为 3 通道，inv 则是调用方决定的 (count-1) 或 (count-1)*3。
+        let t = (value - axis[axisIndex]) * inv[invIndex]
+        return y[yIndex] + t * (y[yIndex + 3] - y[yIndex])
     }
 
 

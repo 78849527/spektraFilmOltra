@@ -124,6 +124,31 @@ struct DebugParams: Codable {
     var lutMode: Bool = false
 }
 
+/// RAW 解码参数：只在解码阶段生效，不进 RuntimePhotoParams。
+/// 对应参考实现 `load_raw`（白平衡 / 色温 / 色调 / 镜头校正）。
+struct LoadRawParams: Codable, Equatable {
+    var whiteBalance: String = "as_shot"
+    var temperature: Double = 5500
+    var tint: Double = 1.0
+    var lensCorrection: Bool = true
+
+    init() {}
+
+    private enum CodingKeys: String, CodingKey {
+        case whiteBalance, temperature, tint, lensCorrection
+    }
+
+    /// 索引里可能没有这个子对象（旧版本只存过 as_shot + 镜头校正默认值），
+    /// 逐字段回退默认，避免整库解码失败。
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        whiteBalance = try container.decodeIfPresent(String.self, forKey: .whiteBalance) ?? "as_shot"
+        temperature = try container.decodeIfPresent(Double.self, forKey: .temperature) ?? 5500
+        tint = try container.decodeIfPresent(Double.self, forKey: .tint) ?? 1.0
+        lensCorrection = try container.decodeIfPresent(Bool.self, forKey: .lensCorrection) ?? true
+    }
+}
+
 struct SettingsParams: Codable {
     var rgbToRawMethod: String = "hanatos2025"
     var applyHanatos2025AdaptationWindow: Bool = true

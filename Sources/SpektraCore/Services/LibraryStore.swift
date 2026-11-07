@@ -14,6 +14,42 @@ struct PhotoEdit: Codable {
     var settings = SettingsParams()
     var debug = DebugParams()
     var quickIntents: [String: Double] = [:]
+    /// RAW 解码参数（白平衡/色温/色调/镜头校正）。改变后需要重新解码原图。
+    var loadRaw = LoadRawParams()
+
+    init() {}
+
+    private enum CodingKeys: String, CodingKey {
+        case filmStock, printStock, camera, enlarger, filmRender, printRender
+        case scanner, io, settings, debug, quickIntents, loadRaw
+    }
+
+    /// 逐字段解码：旧索引缺少新字段时回退默认值，避免整库解码失败后读成空库。
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        filmStock = try container.decodeIfPresent(String.self, forKey: .filmStock) ?? "kodak_portra_400"
+        printStock = try container.decodeIfPresent(String.self, forKey: .printStock) ?? "kodak_supra_endura"
+        camera = try container.decodeIfPresent(CameraParams.self, forKey: .camera) ?? CameraParams()
+        enlarger = try container.decodeIfPresent(EnlargerParams.self, forKey: .enlarger) ?? EnlargerParams()
+        filmRender = try container.decodeIfPresent(FilmRenderParams.self, forKey: .filmRender) ?? FilmRenderParams()
+        printRender = try container.decodeIfPresent(PrintRenderParams.self, forKey: .printRender) ?? PrintRenderParams()
+        scanner = try container.decodeIfPresent(ScannerParams.self, forKey: .scanner) ?? ScannerParams()
+        io = try container.decodeIfPresent(IOParams.self, forKey: .io) ?? IOParams()
+        settings = try container.decodeIfPresent(SettingsParams.self, forKey: .settings) ?? SettingsParams()
+        debug = try container.decodeIfPresent(DebugParams.self, forKey: .debug) ?? DebugParams()
+        quickIntents = try container.decodeIfPresent([String: Double].self, forKey: .quickIntents) ?? [:]
+        loadRaw = try container.decodeIfPresent(LoadRawParams.self, forKey: .loadRaw) ?? LoadRawParams()
+    }
+
+    /// RAW 解码选项：白平衡/色温/色调/镜头校正。解码尺寸由调用方另行传入。
+    func rawDecoderOptions() -> RawDecoder.Options {
+        var options = RawDecoder.Options()
+        options.whiteBalance = loadRaw.whiteBalance
+        options.temperature = loadRaw.temperature
+        options.tint = loadRaw.tint
+        options.lensCorrection = loadRaw.lensCorrection
+        return options
+    }
 
     func runtimeParams() throws -> RuntimePhotoParams {
         var params = RuntimePhotoParams(
@@ -88,14 +124,26 @@ final class LibraryStore {
     }
 
     func save() throws {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let data = try encoder.encode(photos)
-        try data.write(to: indexURL)
+        // 所有索引写入共用同一条串行队列：同步写会排在已入队的异步快照之后执行。
+        // 否则旧快照可能晚于新索引落盘，表现为导入的照片从索引消失、或移除的照片复活。
+        let snapshot = photos
+        var failure: Error?
+        ioQueue.sync {
+            do {
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+                let data = try encoder.encode(snapshot)
+                try data.write(to: indexURL, options: .atomic)
+            } catch {
+                failure = error
+            }
+        }
+        if let failure { throw failure }
     }
 
     /// 参数类更新：先快照，再异步写索引。主线程不再做 JSON 编码与磁盘 IO，
     /// 拖动滑条时每 0.7 秒一次的落盘不会再卡住手势。
+    /// 异步写与 `save()` 共用 `ioQueue`，因此调用顺序就是落盘顺序。
     private func persistIndexAsync() {
         let snapshot = photos
         let url = indexURL
@@ -178,12 +226,13 @@ final class LibraryStore {
     func remove(id: String) throws {
         guard let index = photos.firstIndex(where: { $0.id == id }) else { return }
         let photo = photos[index]
+        photos.remove(at: index)
+        // 先把索引落盘，再删文件：索引写失败时不会留下指向已删原图的条目。
+        try save()
         try? FileManager.default.removeItem(at: originalURL(for: photo))
         if let thumbnail = photo.thumbnailPath {
             try? FileManager.default.removeItem(at: Self.resolve(thumbnail, root: root, folder: "Thumbnails"))
         }
-        photos.remove(at: index)
-        try save()
     }
 
     func writeThumbnail(id: String, image: ImageRGB) throws {

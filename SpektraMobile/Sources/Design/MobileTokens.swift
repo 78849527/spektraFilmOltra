@@ -215,6 +215,8 @@ enum DebugLaunch {
     static var exportAutoStart: Bool { args.contains("--export-run") }
     /// 截图验收用：调色「调整」面板默认从底部开始，好截到「质感」分区。
     static var gradePanelBottom: Bool { args.contains("--grade-bottom") }
+    /// 截图验收用：显影「细节」专业页默认滚到底部，好截到输入/输出分组。
+    static var developPanelBottom: Bool { args.contains("--detail-bottom") }
     /// 机型矩阵验收用：启动时把真实安全区与推导出的开孔矩形打到日志（`log show` 可读）。
     static var probeGeometry: Bool { args.contains("--probe-geometry") }
 

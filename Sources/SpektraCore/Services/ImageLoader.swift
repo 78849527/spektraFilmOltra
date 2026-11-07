@@ -58,7 +58,9 @@ enum ImageLoader {
 
     /// - Parameter maxSize: 长边上限。预览只解码到显示需要的尺寸，避免为 12MP 原图
     ///   常驻 290MB 的双精度缓冲；导出传 nil 才是全分辨率。
-    static func load(url: URL, maxSize: Int? = nil) throws -> LoadedImage {
+    /// - Parameter rawOptions: RAW 解码参数（白平衡/色温/色调/镜头校正）；非 RAW 忽略。
+    static func load(url: URL, maxSize: Int? = nil,
+                     rawOptions: RawDecoder.Options = RawDecoder.Options()) throws -> LoadedImage {
         let detected = detectColorSpace(url: url)
         let suffix = url.pathExtension.lowercased()
         if rejectedSuffixes.contains(suffix) {
@@ -70,15 +72,16 @@ enum ImageLoader {
             #if targetEnvironment(simulator)
             // 模拟器没有相机 RAW 描述，CIRAWFilter 会永久卡在 MobileAsset 查询上，
             // 直接走 ImageIO 的缩略图管线（已去马赛克，线性 sRGB），只用于预览与验收。
+            // 该路径无法应用白平衡/镜头校正参数，真机才走 CIRAWFilter。
             let image = try RawDecoder.decodeThumbnail(url: url, maxSize: maxSize ?? 4096)
             return LoadedImage(image: image, colorSpace: "sRGB",
                                cctfDecoding: false, isRaw: true)
             #else
             do {
-                let image = try RawDecoder.decode(
-                    url: url,
-                    options: RawDecoder.Options(outputColorSpace: detected.space, maxSize: maxSize)
-                )
+                var options = rawOptions
+                options.outputColorSpace = detected.space
+                options.maxSize = maxSize
+                let image = try RawDecoder.decode(url: url, options: options)
                 return LoadedImage(image: image, colorSpace: detected.space,
                                    cctfDecoding: false, isRaw: true)
             } catch {

@@ -199,6 +199,33 @@ enum MobileCatalog {
             MProGroup(id: "detail-film", title: "底片", rows: [
                 toggle("scan_film", "查看底片", false),
             ]),
+            MProGroup(id: "detail-input", title: "输入", rows: [
+                choice("white_balance", "白平衡", [
+                    MProOption(value: "as_shot", label: "相机设定"),
+                    MProOption(value: "daylight", label: "日光"),
+                    MProOption(value: "tungsten", label: "钨丝灯"),
+                    MProOption(value: "custom", label: "自定义"),
+                ], "as_shot"),
+                slider("white_balance_temperature", "色温", 5500, 1000...10000, 100, 0, " K"),
+                slider("white_balance_tint", "色调", 1.0, 0.5...2.0, 0.01, 2, ""),
+                toggle("lens_correction", "镜头校正", true),
+                toggle("crop", "裁切", false),
+                slider("crop_center_x", "裁切中心 X", 0.5, 0...1, 0.01, 2, ""),
+                slider("crop_center_y", "裁切中心 Y", 0.5, 0...1, 0.01, 2, ""),
+                slider("crop_size_x", "裁切宽", 0.1, 0.1...1, 0.01, 2, ""),
+                slider("crop_size_y", "裁切高", 0.1, 0.1...1, 0.01, 2, ""),
+                slider("upscale_factor", "放大", 1.0, 1...4, 0.05, 2, "×"),
+                toggle("input_gamut_compress", "输入色域压缩", true),
+            ]),
+            MProGroup(id: "detail-output", title: "输出", rows: [
+                choice("output_gamut_compress", "输出色域压缩", [
+                    MProOption(value: "cam16ucs", label: "CAM16-UCS"),
+                    MProOption(value: "oklch", label: "OkLCh"),
+                    MProOption(value: "oklrab", label: "OkLrAB"),
+                    MProOption(value: "jzazbz", label: "JzAzBz"),
+                    MProOption(value: "aces_rgc", label: "ACES RGC"),
+                ], "cam16ucs"),
+            ]),
         ]),
     ]
 

@@ -134,9 +134,10 @@ final class MobileEngine: ObservableObject {
         let id = photo.id
         let url = store.originalURL(for: photo)
         let edit = photo.edit
+        let options = edit.rawDecoderOptions()
         thumbnailQueue.async { [weak self] in
             guard let self else { return }
-            guard let loaded = try? ImageLoader.load(url: url, maxSize: 320),
+            guard let loaded = try? ImageLoader.load(url: url, maxSize: 320, rawOptions: options),
                   var params = try? edit.runtimeParams() else { return }
             params.io.inputColorSpace = loaded.colorSpace
             params.io.inputCCTFDecoding = loaded.cctfDecoding

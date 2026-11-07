@@ -423,6 +423,7 @@ struct MParamSlider: View {
         .accessibilityLabel(label)
         .accessibilityValue(text(for: value))
         .accessibilityAdjustableAction { direction in
+            guard isEnabled else { return }
             let delta = max(step, (range.upperBound - range.lowerBound) / 100)
             switch direction {
             case .increment:
@@ -873,6 +874,8 @@ struct MColorPad: View {
     @Binding var y: Double
     var width: CGFloat = 156
     var height: CGFloat = 92
+    /// 正片扫描模式等场景下印相滤色不参与成像，需要置灰并停止手势。
+    var isEnabled: Bool = true
 
     var body: some View {
         ZStack {
@@ -944,18 +947,22 @@ struct MColorPad: View {
         .accessibilityLabel("印相色彩盘")
         .accessibilityValue("冷暖 \(Int(x.rounded()))，绿品红 \(Int(y.rounded()))")
         .accessibilityAdjustableAction { direction in
+            guard isEnabled else { return }
             switch direction {
             case .increment: x = min(100, x + 5)
             case .decrement: x = max(-100, x - 5)
             @unknown default: break
             }
         }
-        .accessibilityAction(named: "更绿") { y = max(-100, y - 5) }
-        .accessibilityAction(named: "更品红") { y = min(100, y + 5) }
+        .accessibilityAction(named: "更绿") { guard isEnabled else { return }; y = max(-100, y - 5) }
+        .accessibilityAction(named: "更品红") { guard isEnabled else { return }; y = min(100, y + 5) }
         .accessibilityAction(named: "回到中性") {
+            guard isEnabled else { return }
             x = 0
             y = 0
         }
+        .allowsHitTesting(isEnabled)
+        .opacity(isEnabled ? 1 : 0.4)
     }
 
     private var handle: some View {

@@ -336,6 +336,17 @@ struct DevelopScreen: View {
 
             Spacer(minLength: 0)
 
+            // 拖动期的 LUT 预测帧精度低于精算帧，必须让用户知道当前看到的是过渡画面。
+            if session.isPredicted, !showOriginal {
+                Text("预测")
+                    .font(.mSans(8.5, .medium))
+                    .foregroundStyle(MColor.brassHigh.opacity(0.92))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .mGlassSurface(Capsule(), fallbackFill: Color.black.opacity(0.42))
+                    .accessibilityLabel("LUT 预测帧，停手后替换为精算帧")
+            }
+
             if zoom > 1 || showOriginal {
                 Text(showOriginal ? "原片" : "\(Int(zoom * 100))%")
                     .font(.mSans(8.5, .medium).monospacedDigit())
@@ -662,6 +673,12 @@ struct DevelopScreen: View {
                     quickSlider("camera_exposure")
                     quickSlider("print_brightness")
                     quickSlider("tonal_contrast")
+
+                    if scanFilmMode {
+                        Text(printOnlyQuickNote)
+                            .mMeta(7.5, color: MColor.text4)
+                            .padding(.top, -2)
+                    }
                 } else {
                     proGroupsView(0)
                         .padding(.top, 2)
@@ -701,7 +718,8 @@ struct DevelopScreen: View {
                             x: padXBinding,
                             y: padYBinding,
                             width: max(1, geo.size.width),
-                            height: 96
+                            height: 96,
+                            isEnabled: !scanFilmMode
                         )
                     }
                     .frame(height: 96)
@@ -710,13 +728,19 @@ struct DevelopScreen: View {
                     HStack(spacing: 6) {
                         Text("冷暖 \(ccText(session.padX))")
                             .font(.mSans(8, .medium).monospacedDigit())
-                            .foregroundStyle(abs(session.padX) > 0.5 ? MColor.brass : MColor.text3)
+                            .foregroundStyle(abs(session.padX) > 0.5 && !scanFilmMode ? MColor.brass : MColor.text3)
                         Spacer(minLength: 0)
                         Text("品红 \(ccText(session.padY))")
                             .font(.mSans(8, .medium).monospacedDigit())
-                            .foregroundStyle(abs(session.padY) > 0.5 ? MColor.brass : MColor.text3)
+                            .foregroundStyle(abs(session.padY) > 0.5 && !scanFilmMode ? MColor.brass : MColor.text3)
                     }
                     .padding(.top, 6)
+
+                    if scanFilmMode {
+                        Text(printOnlyQuickNote)
+                            .mMeta(7.5, color: MColor.text4)
+                            .padding(.top, 4)
+                    }
 
                 } else {
                     proGroupsView(1)
@@ -736,41 +760,49 @@ struct DevelopScreen: View {
     // MARK: - 细节页
 
     private var detailPage: some View {
-        ScrollView(.vertical) {
-            VStack(alignment: .leading, spacing: 0) {
-                if mode == 0 {
-                    quickSectionHead("质感") {
-                        resetQuick()
-                    }
-
-                    HStack(alignment: .top, spacing: 12) {
-                        VStack(alignment: .leading, spacing: 0) {
-                            quickSlider("grain_amount")
-                            quickSlider("grain_size")
-                            quickSlider("scanner_clarity")
-                            Spacer(minLength: 0)
+        ScrollViewReader { proxy in
+            ScrollView(.vertical) {
+                VStack(alignment: .leading, spacing: 0) {
+                    if mode == 0 {
+                        quickSectionHead("质感") {
+                            resetQuick()
                         }
-                        .frame(maxWidth: .infinity)
 
-                        MGrainSample(intensity: grainIntensity)
-                            .frame(width: 88, height: 88)
-                            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                    }
-                    .padding(.top, 2)
+                        HStack(alignment: .top, spacing: 12) {
+                            VStack(alignment: .leading, spacing: 0) {
+                                quickSlider("grain_amount")
+                                quickSlider("grain_size")
+                                quickSlider("scanner_clarity")
+                                Spacer(minLength: 0)
+                            }
+                            .frame(maxWidth: .infinity)
 
-                } else {
-                    proGroupsView(3)
+                            MGrainSample(intensity: grainIntensity)
+                                .frame(width: 88, height: 88)
+                                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                        }
                         .padding(.top, 2)
 
-                    resetButton("重置专业参数", action: resetPro)
-                        .padding(.top, 16)
+                    } else {
+                        proGroupsView(3)
+                            .padding(.top, 2)
+
+                        resetButton("重置专业参数", action: resetPro)
+                            .padding(.top, 16)
+                    }
+                }
+                .padding(.horizontal, MMetric.pageMargin)
+                .padding(.bottom, 16)
+                .background(MPanelHeightReporter())
+            }
+            .scrollIndicators(.never)
+            .onAppear {
+                guard DebugLaunch.developPanelBottom, mode == 1 else { return }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                    withAnimation(nil) { proxy.scrollTo("detail-output", anchor: .bottom) }
                 }
             }
-            .padding(.horizontal, MMetric.pageMargin)
-            .padding(.bottom, 16)
-            .background(MPanelHeightReporter())
         }
-        .scrollIndicators(.never)
     }
 
     // MARK: - 通用小组件
@@ -785,6 +817,7 @@ struct DevelopScreen: View {
                 step: axis.step,
                 decimals: axis.decimals,
                 suffix: axis.suffix,
+                isEnabled: !(scanFilmMode && printOnlyQuickAxes.contains(id)),
                 compact: true
             )
         }
@@ -802,6 +835,7 @@ struct DevelopScreen: View {
                     proRow(row)
                 }
             }
+            .id(group.id)
         }
     }
 
@@ -1015,6 +1049,18 @@ struct DevelopScreen: View {
         MobileCatalog.quickGroups.flatMap(\.axes)
     }
 
+    /// 正片扫描模式：管线跳过印相曝光/显影，印相专属快速轴不参与成像。
+    private var scanFilmMode: Bool {
+        session.proToggles["scan_film"] ?? false
+    }
+
+    /// 与参考 `PRINT_ONLY_AXES` 对齐：印相明暗、影调反差（色盘 Y/M 单独处理）。
+    private var printOnlyQuickAxes: Set<String> {
+        ["print_brightness", "tonal_contrast"]
+    }
+
+    private let printOnlyQuickNote = "正片扫描模式：管线跳过印相阶段，本项不参与成像"
+
     private var currentFilm: MFilm {
         MobileCatalog.film(id: session.filmID) ?? MobileCatalog.films[0]
     }
@@ -1220,7 +1266,6 @@ struct MExportSheet: View {
         // 内容本身已含底部安全区 padding，这里只留一点上边距，避免面板底部出现一大块空白。
         .presentationDetents([.height(min(640, max(340, contentHeight + 12)))])
         .presentationDragIndicator(.visible)
-        .presentationCornerRadius(MRadius.sheet)
         .presentationBackground(MColor.surface1)
         .onChange(of: format) { _, _ in resetPhaseAfterOptionChange() }
         .onChange(of: longEdge) { _, _ in resetPhaseAfterOptionChange() }

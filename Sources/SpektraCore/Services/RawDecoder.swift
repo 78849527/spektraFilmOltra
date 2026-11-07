@@ -51,8 +51,12 @@ enum RawDecoder {
         }
 
         switch options.whiteBalance {
-        case "as_shot", "daylight":
+        case "as_shot":
             break
+        case "daylight":
+            // 参考实现的 daylight 预设：中性日光白平衡，等价于 5500 K / 中性色调。
+            filter.neutralTemperature = 5500
+            filter.neutralTint = 0
         case "tungsten":
             filter.neutralTemperature = 2850
         case "custom":

@@ -75,6 +75,8 @@ final class MobileDevelopSession: ObservableObject {
     private var pendingSettle: DispatchWorkItem?
     private var persistWork: DispatchWorkItem?
     private var pendingHandoffs: [(Int, (ImageRGB?) -> Void)] = []
+    /// 白平衡/镜头校正变化后重新解码原图的防抖任务；拖动过程中合并成一次。
+    private var pendingRawReload: DispatchWorkItem?
 
     /// 原图长边（导入时写入库里的真实像素尺寸）。预览比例与导出「原始」都基于它，
     /// 不能用预览缓冲的 1600 长边，否则 12 MP 原图会被当成 1600 长边导出。
@@ -93,6 +95,8 @@ final class MobileDevelopSession: ObservableObject {
         min(previewEdge, PreviewLUTService.maxPredictionEdge)
     }
     /// 交互预测用的低分辨率查找表：33³ 只做拖动期的过渡画面，停手后仍由全精度精算替换。
+    /// 桌面侧的 ΔE00 门禁（p99 ≤ 1.0）是在 65³ 上测的；移动端为守住拖动延迟用 33³，
+    /// 预测帧因此不是门禁口径的交付结果——界面用 `isPredicted` 标注，交付一律以精算帧为准。
     private let fastResolution = 33
     /// 停手后多久回落精算帧。精算已从 1.69 s 降到 0.91 s（1280 预览），
     /// 防抖可以从 0.5 s 收紧到 0.32 s，停手到清晰画面的总延迟从 ~2.2 s 降到 ~1.2 s。
@@ -129,6 +133,8 @@ final class MobileDevelopSession: ObservableObject {
         fastToken += 1
         renderToken += 1
         pendingSettle?.cancel()
+        pendingRawReload?.cancel()
+        pendingRawReload = nil
         persistWork?.cancel()
         fastDirty = false
         renderer.invalidate()
@@ -167,9 +173,12 @@ final class MobileDevelopSession: ObservableObject {
         isRendering = true
         phaseLabel = "读取 RAW"
         phaseProgress = 0
+        // 解码参数在主线程取好，后台队列只做像素工作。
+        let options = rawOptions()
         loadQueue.async { [weak self] in
             do {
-                let loaded = try ImageLoader.load(url: originalURL, maxSize: maxSize)
+                let loaded = try ImageLoader.load(
+                    url: originalURL, maxSize: maxSize, rawOptions: options)
                 let preview = Resize.smallPreview(loaded.image, maxSize: maxSize)
                 let display = Self.displayImage(preview, colorSpace: loaded.colorSpace,
                                                 cctfDecoding: loaded.cctfDecoding)
@@ -225,6 +234,38 @@ final class MobileDevelopSession: ObservableObject {
         }
     }
 
+    // MARK: - RAW 解码参数
+
+    /// 当前编辑里的 RAW 解码选项。白平衡/镜头校正只在解码阶段生效，
+    /// 改动后必须重新解码原图，而不是只重渲染。
+    private func rawOptions() -> RawDecoder.Options {
+        edit.rawDecoderOptions()
+    }
+
+    /// 重解码防抖：与停手精算同一档，拖动白平衡时不会每格都解一次 RAW。
+    private func scheduleRawReload() {
+        pendingRawReload?.cancel()
+        guard image != nil else { return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.pendingRawReload = nil
+            self.loadOriginal(maxSize: max(1600, self.previewEdge))
+        }
+        pendingRawReload = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + settleDelay, execute: work)
+    }
+
+    /// 选片时的正片扫描规则：参考 digest_after_selection 直接把 scan_film 设成 is_positive。
+    private static func scanFilmForSelection(_ stock: String) -> Bool? {
+        (try? ProfileStore.load(stock))?.info.isPositive
+    }
+
+    /// 只对正片强制开启；负片保留用户手动「查看底片」的选择。
+    private static func enforcePositiveScanMode(on edit: inout PhotoEdit) {
+        guard let profile = try? ProfileStore.load(edit.filmStock), profile.info.isPositive else { return }
+        edit.io.scanFilm = true
+    }
+
     // MARK: - 参数映射
 
     func applyQuick(_ id: String, _ q: Double) {
@@ -260,17 +301,27 @@ final class MobileDevelopSession: ObservableObject {
         schedulePreview()
     }
 
+    /// 这些滑块参与 RAW 解码，改变后要重新解码原图，而不是只重渲染。
+    private static let rawDecodeSliders: Set<String> = [
+        "white_balance_temperature", "white_balance_tint",
+    ]
+
     func applyPro(_ id: String, _ value: Double) {
         pushUndo(key: "pro." + id)
         writePro(id, value)
         edit.quickIntents = quickIntents
         proValues[id] = value
         persistSoon()
-        schedulePreview()
+        if Self.rawDecodeSliders.contains(id) {
+            scheduleRawReload()
+        } else {
+            schedulePreview()
+        }
     }
 
     func applyProToggle(_ id: String, _ value: Bool) {
         pushUndo(key: "toggle." + id)
+        var reloadsRaw = false
         switch id {
         case "auto_exposure": edit.camera.autoExposure = value
         case "print_exposure_compensation": edit.enlarger.printExposureCompensation = value
@@ -287,38 +338,60 @@ final class MobileDevelopSession: ObservableObject {
         case "white_correction": edit.scanner.whiteCorrection = value
         case "black_correction": edit.scanner.blackCorrection = value
         case "scan_film": edit.io.scanFilm = value
+        case "lens_correction":
+            edit.loadRaw.lensCorrection = value
+            reloadsRaw = true
+        case "crop": edit.io.crop = value
+        case "input_gamut_compress": edit.io.inputGamutCompressActive = value
         default: break
         }
         proToggles[id] = value
         persistSoon()
-        schedulePreview()
+        if reloadsRaw {
+            scheduleRawReload()
+        } else {
+            schedulePreview()
+        }
     }
 
-    /// 专业页下拉项（测光方式、印相光源、柔光类型）。
+    /// 专业页下拉项（测光方式、印相光源、柔光类型、白平衡、输出色域压缩）。
     func applyProChoice(_ id: String, _ value: String) {
         pushUndo(key: "choice." + id)
+        var reloadsRaw = false
         switch id {
         case "auto_exposure_method": edit.camera.autoExposureMethod = value
         case "print_illuminant": edit.enlarger.illuminant = value
         case "camera_diffusion_family": edit.camera.diffusionFilter.filterFamily = value
+        case "white_balance":
+            edit.loadRaw.whiteBalance = value
+            reloadsRaw = true
+        case "output_gamut_compress": edit.io.outputGamutCompressAlgorithm = value
         default: return
         }
         proChoices[id] = value
         persistSoon()
-        schedulePreview()
+        if reloadsRaw {
+            scheduleRawReload()
+        } else {
+            schedulePreview()
+        }
     }
 
     func setFilm(_ id: String) {
         guard id != edit.filmStock else { return }
         pushUndo(key: "film")
-        var next = baseline
+        // 以当前编辑为底：换胶片只换 stock 与胶片派生项，专业页的颗粒/光晕/扫描等改动必须保留。
+        var next = edit
         next.filmStock = id
+        // 正片必须走「扫描胶片」链路；参考 digest_after_selection 在选片时按 is_positive 设定。
+        if let scanFilm = Self.scanFilmForSelection(id) {
+            next.io.scanFilm = scanFilm
+        }
         next.quickIntents = quickIntents
         for (control, q) in quickIntents where abs(q) > 1e-9 {
             applyQuickMapping(id: control, q: q, edit: &next)
         }
-        // 色盘纵向（品红/绿）没有对应的 quickIntents 字段，换胶片时必须从当前色盘位置恢复，
-        // 否则会被 baseline 抹掉。
+        // 色盘纵向（品红/绿）没有对应的 quickIntents 字段，换胶片时必须从当前色盘位置恢复。
         next.enlarger.yFilterShift = clamp(
             baseline.enlarger.yFilterShift + 60 * padX / 100, -60, 60)
         next.enlarger.mFilterShift = clamp(
@@ -359,25 +432,37 @@ final class MobileDevelopSession: ObservableObject {
 
     func resetPro() {
         pushUndo(key: "reset.pro")
+        let previousLoadRaw = edit.loadRaw
         edit = baseline
         edit.filmStock = filmID
         edit.printStock = paperID
+        // 基线可能是在旧版本/旧会话里捕获的：正片仍必须走扫描胶片。
+        Self.enforcePositiveScanMode(on: &edit)
         quickIntents = [:]
         edit.quickIntents = [:]
         publishFromEdit()
         persistNow()
-        schedulePreview()
+        if edit.loadRaw != previousLoadRaw {
+            scheduleRawReload()
+        } else {
+            schedulePreview()
+        }
     }
 
     func undo() {
         guard let previous = undoStack.popLast() else { return }
+        let previousLoadRaw = edit.loadRaw
         edit = previous
         quickIntents = previous.quickIntents
         canUndo = !undoStack.isEmpty
         lastUndoKey = ""
         publishFromEdit()
         persistNow()
-        schedulePreview()
+        if edit.loadRaw != previousLoadRaw {
+            scheduleRawReload()
+        } else {
+            schedulePreview()
+        }
     }
 
     // MARK: - 导出
@@ -427,12 +512,14 @@ final class MobileDevelopSession: ObservableObject {
         let cctf = params.io.outputCCTFEncoding
         let destination = Self.exportURL(filename: filename, ext: ext)
         let sourceURL = originalURL
+        let options = rawOptions()
         isExporting = true
         exportLabel = clampedNote
         exportProgress = 0
         exportQueue.async { [weak self] in
             // 导出按目标长边重新解码原图：预览缓存是缩小版，不能拿它放大。
-            guard let loaded = try? ImageLoader.load(url: sourceURL, maxSize: requested) else {
+            guard let loaded = try? ImageLoader.load(
+                url: sourceURL, maxSize: requested, rawOptions: options) else {
                 Task { @MainActor [weak self] in
                     self?.isExporting = false
                     self?.exportLabel = ""
@@ -504,11 +591,12 @@ final class MobileDevelopSession: ObservableObject {
         let previewEdge = max(previewImage.width, previewImage.height)
         let previewSpace = inputColorSpace
         let previewCCTF = inputCCTF
+        let options = rawOptions()
         loadQueue.async {
             var params = baseParams
             var source = previewImage
             if maxEdge > previewEdge,
-               let loaded = try? ImageLoader.load(url: url, maxSize: maxEdge) {
+               let loaded = try? ImageLoader.load(url: url, maxSize: maxEdge, rawOptions: options) {
                 source = loaded.image
                 params.io.inputColorSpace = loaded.colorSpace
                 params.io.inputCCTFDecoding = loaded.cctfDecoding
@@ -844,8 +932,35 @@ final class MobileDevelopSession: ObservableObject {
         case "white_level": edit.scanner.whiteLevel = value
         case "black_level": edit.scanner.blackLevel = value
         case "particle_area_um2": edit.filmRender.grain.particleAreaUM2 = value
+        // MARK: 输入（RAW 解码与预处理）
+        case "white_balance_temperature":
+            edit.loadRaw.temperature = clamp(value, 1000, 10000)
+        case "white_balance_tint":
+            edit.loadRaw.tint = clamp(value, 0.5, 2.0)
+        case "crop_center_x":
+            edit.io.cropCenter = pair(edit.io.cropCenter, replacing: 0, with: clamp(value, 0, 1), fallback: 0.5)
+        case "crop_center_y":
+            edit.io.cropCenter = pair(edit.io.cropCenter, replacing: 1, with: clamp(value, 0, 1), fallback: 0.5)
+        case "crop_size_x":
+            edit.io.cropSize = pair(edit.io.cropSize, replacing: 0, with: clamp(value, 0.1, 1), fallback: 0.1)
+        case "crop_size_y":
+            edit.io.cropSize = pair(edit.io.cropSize, replacing: 1, with: clamp(value, 0.1, 1), fallback: 0.1)
+        case "upscale_factor":
+            edit.io.upscaleFactor = clamp(value, 1, 4)
         default: break
         }
+    }
+
+    /// 把二元组（裁切中心/大小）的第 index 项替换掉，长度不足时先补成 fallback 对。
+    private func pair(_ values: [Double], replacing index: Int,
+                      with value: Double, fallback: Double) -> [Double] {
+        var pair = values.count == 2 ? values : [fallback, fallback]
+        pair[index] = value
+        return pair
+    }
+
+    private func pairComponent(_ values: [Double], _ index: Int, _ fallback: Double) -> Double {
+        values.indices.contains(index) ? values[index] : fallback
     }
 
     /// 专业行的基线读数：用于判断滑条是否被改过，避免拿目录默认值误判。
@@ -912,6 +1027,13 @@ final class MobileDevelopSession: ObservableObject {
         case "white_level": return edit.scanner.whiteLevel
         case "black_level": return edit.scanner.blackLevel
         case "particle_area_um2": return edit.filmRender.grain.particleAreaUM2
+        case "white_balance_temperature": return edit.loadRaw.temperature
+        case "white_balance_tint": return edit.loadRaw.tint
+        case "crop_center_x": return pairComponent(edit.io.cropCenter, 0, 0.5)
+        case "crop_center_y": return pairComponent(edit.io.cropCenter, 1, 0.5)
+        case "crop_size_x": return pairComponent(edit.io.cropSize, 0, 0.1)
+        case "crop_size_y": return pairComponent(edit.io.cropSize, 1, 0.1)
+        case "upscale_factor": return edit.io.upscaleFactor
         default: return 0
         }
     }
@@ -933,6 +1055,9 @@ final class MobileDevelopSession: ObservableObject {
         case "white_correction": return edit.scanner.whiteCorrection
         case "black_correction": return edit.scanner.blackCorrection
         case "scan_film": return edit.io.scanFilm
+        case "lens_correction": return edit.loadRaw.lensCorrection
+        case "crop": return edit.io.crop
+        case "input_gamut_compress": return edit.io.inputGamutCompressActive
         default: return false
         }
     }
@@ -942,6 +1067,8 @@ final class MobileDevelopSession: ObservableObject {
         case "auto_exposure_method": return edit.camera.autoExposureMethod
         case "print_illuminant": return edit.enlarger.illuminant
         case "camera_diffusion_family": return edit.camera.diffusionFilter.filterFamily
+        case "white_balance": return edit.loadRaw.whiteBalance
+        case "output_gamut_compress": return edit.io.outputGamutCompressAlgorithm
         default: return ""
         }
     }
