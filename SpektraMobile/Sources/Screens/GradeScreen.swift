@@ -158,18 +158,16 @@ struct GradeScreen: View {
         withAnimation(.spring(response: 0.45, dampingFraction: 0.7)) {
             cardRect = cardTargetRect()
             cardRadius = 2
-        } completion: {
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
             withAnimation(.easeOut(duration: 0.32)) {
                 cardOpacity = 0
                 imageRevealed = true
-            } completion: {
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.32) {
                 cardVisible = false
             }
         }
-    }
-
-    private func cardTargetRect() -> CGRect {
-        MImageFit.rect(aspect: session.previewAspect, in: stageSize, horizontalPadding: 14)
     }
 
     private func cardStartRect() -> CGRect {
