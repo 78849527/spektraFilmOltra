@@ -510,7 +510,14 @@ struct GradeScreen: View {
             .background(
                 GeometryReader { proxy in
                     Color.clear
-                        .onChange(of: proxy.size.height, initial: true) { height in
+                        .onAppear {
+                            let height = proxy.size.height
+                            panelViewportHeight = height
+                            if drawerChrome == 0, height > 0 {
+                                drawerChrome = max(0, drawerHeight - height)
+                            }
+                        }
+                        .onChange(of: proxy.size.height) { height in
                             panelViewportHeight = height
                             if drawerChrome == 0, height > 0 {
                                 drawerChrome = max(0, drawerHeight - height)
