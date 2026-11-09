@@ -156,7 +156,7 @@ struct GradeScreen: View {
         cardOpacity = 1
         imageRevealed = false
         withAnimation(.spring(response: 0.45, dampingFraction: 0.7)) {
-            cardRect = cardTargetRect()
+            cardRect = fittedPreviewRect(in: stageSize)
             cardRadius = 2
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
@@ -791,7 +791,8 @@ struct GradeScreen: View {
     // MARK: - 调整
 
     private var adjustPanel: some View {
-        ScrollView(.vertical) {
+        ScrollViewReader { proxy in
+            ScrollView(.vertical) {
             VStack(alignment: .leading, spacing: 0) {
                 MSectionHead(title: "光调", trailing: "\(gradeDirtyCount) 项已调").padding(.top, 12)
 
@@ -869,9 +870,16 @@ struct GradeScreen: View {
             .padding(.horizontal, MMetric.pageMargin)
             .padding(.bottom, 14)
             .background(MPanelHeightReporter())
+                .id("gradePanelContent")
+            }
+            .scrollIndicators(.never)
+            .onAppear {
+                guard DebugLaunch.gradePanelBottom else { return }
+                DispatchQueue.main.async {
+                    proxy.scrollTo("gradePanelContent", anchor: .bottom)
+                }
+            }
         }
-        .scrollIndicators(.never)
-        .defaultScrollAnchor(DebugLaunch.gradePanelBottom ? .bottom : .top)
     }
 
     // MARK: - 曲线

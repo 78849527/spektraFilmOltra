@@ -241,10 +241,12 @@ struct MobileRootView: View {
         withAnimation(.spring(response: 0.48, dampingFraction: 0.66)) {
             flightRect = target
             flightRadius = min(target.width, target.height) / 2
-        } completion: {
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.48) {
             withAnimation(.easeIn(duration: 0.18)) {
                 flightOpacity = 0
-            } completion: {
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
                 guard flightPhase == .sucking else { return }
                 flightPhase = .idle
                 flightRect = target

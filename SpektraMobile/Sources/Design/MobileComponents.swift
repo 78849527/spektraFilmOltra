@@ -1431,10 +1431,12 @@ enum MImageFit {
 }
 
 /// iOS 16 compatible rounded top corners used by the mobile sheets.
-struct MTopRoundedRectangle: Shape {
+struct MTopRoundedRectangle: InsettableShape {
     var radius: CGFloat
+    var insetAmount: CGFloat = 0
 
     func path(in rect: CGRect) -> Path {
+        let rect = rect.insetBy(dx: insetAmount, dy: insetAmount)
         let r = min(radius, min(rect.width, rect.height) / 2)
         var path = Path()
         path.move(to: CGPoint(x: rect.minX, y: rect.maxY))
@@ -1451,6 +1453,12 @@ struct MTopRoundedRectangle: Shape {
         path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
         path.closeSubpath()
         return path
+    }
+
+    func inset(by amount: CGFloat) -> MTopRoundedRectangle {
+        var shape = self
+        shape.insetAmount += amount
+        return shape
     }
 }
 
