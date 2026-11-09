@@ -18,9 +18,9 @@ struct DevelopScreen: View {
 
     @State private var showOriginal = false
     @State private var pressToken = 0
-    @State private var zoom: CGFloat = 1
-    @State private var pan: CGSize = .zero
-    @State private var lastPan: CGSize = .zero
+    @State private var zoom: CGFloat = DebugLaunch.canvasZoom
+    @State private var pan: CGSize = CGSize(width: 0, height: DebugLaunch.canvasPanY)
+    @State private var lastPan: CGSize = CGSize(width: 0, height: DebugLaunch.canvasPanY)
     @State private var exportOpen = DebugLaunch.exportOpen
     @State private var tabPressStart: Date?
     @State private var stageSize: CGSize = .zero
@@ -139,6 +139,11 @@ struct DevelopScreen: View {
                 .animation(MMotion.quick, value: session.phaseLabel)
         }
         .padding(.top, 10)
+        // 顶部按钮下面铺一层从上到下的黑色渐隐：放大后照片从控件下方经过时，模式胶囊与文件信息仍然可读。
+        .background(alignment: .top) {
+            MTopScrim(height: 170)
+                .offset(y: -insets.top)
+        }
     }
 
     /// 预览渲染比例菜单：1/8、1/4、1/2、1/1，与 Swift 主线的 previewScale 档位一致。
@@ -162,7 +167,7 @@ struct DevelopScreen: View {
             .foregroundStyle(MColor.text2)
             .padding(.horizontal, 9)
             .frame(height: 28)
-            .background(Capsule().fill(MColor.surface2.opacity(0.9)))
+            .mGlassSurface(Capsule(), fallbackFill: MColor.surface2.opacity(0.9))
             .overlay(Capsule().strokeBorder(MColor.hairline, lineWidth: 1))
         }
         .accessibilityLabel("预览渲染比例")
@@ -224,7 +229,7 @@ struct DevelopScreen: View {
                         .foregroundStyle(MColor.text4)
                 }
             }
-            .clipped()
+            // 不再按预览槽裁切：画布是整个页面，放大后照片可以延伸到顶部控件与抽屉下面。
             .opacity(imageRevealed && !previewHidden ? 1 : 0)
             .contentShape(Rectangle())
             .onTapGesture(count: 2) {
@@ -281,14 +286,6 @@ struct DevelopScreen: View {
                 .zIndex(2)
 
             VStack(spacing: 0) {
-                LinearGradient(
-                    colors: [Color.black.opacity(0.36), Color.clear],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .frame(height: 94)
-                .allowsHitTesting(false)
-
                 Spacer(minLength: 0)
 
                 LinearGradient(
@@ -485,15 +482,12 @@ struct DevelopScreen: View {
 
             tabBar
         }
+        // 抽屉是玻璃层：放大后的照片会从下面透出来，而不是被整块实色盖住。
         .background(
-            UnevenRoundedRectangle(
-                topLeadingRadius: MRadius.sheet,
-                bottomLeadingRadius: 0,
-                bottomTrailingRadius: 0,
-                topTrailingRadius: MRadius.sheet,
-                style: .continuous
-            )
-            .fill(MColor.surface1)
+            ZStack {
+                drawerShape.fill(.ultraThinMaterial)
+                drawerShape.fill(Color.black.opacity(0.30))
+            }
         )
         .overlay(alignment: .top) {
             UnevenRoundedRectangle(
@@ -995,9 +989,20 @@ struct DevelopScreen: View {
             }
         }
         .padding(.horizontal, 8)
-        .padding(.bottom, insets.bottom)
-        .background(MColor.surface1)
+        // 图标+文字整体在「分隔线→屏幕底」的完整栏高内垂直居中
+        //（内容高 36 = 图标区 22 + 间距 3 + 文字行 ~11；栏高 36 + 底部安全区）
+        .frame(height: 36 + insets.bottom, alignment: .center)
         .overlay(alignment: .top) { MHairline() }
+    }
+
+    private var drawerShape: UnevenRoundedRectangle {
+        UnevenRoundedRectangle(
+            topLeadingRadius: MRadius.sheet,
+            bottomLeadingRadius: 0,
+            bottomTrailingRadius: 0,
+            topTrailingRadius: MRadius.sheet,
+            style: .continuous
+        )
     }
 
     private func tabLabel(_ item: (title: String, icon: String), index: Int) -> some View {

@@ -258,6 +258,20 @@ enum DebugLaunch {
         }
     }
 
+    /// 截图验收用：直接以指定缩放启动画布，检查放大后照片是否延伸到顶栏与抽屉下面。
+    static var canvasZoom: CGFloat {
+        guard let index = args.firstIndex(of: "--zoom"), args.indices.contains(index + 1),
+              let value = Double(args[index + 1]) else { return 1 }
+        return CGFloat(min(max(value, 1), 4))
+    }
+
+    /// 截图验收用：给画布一个初始纵向偏移，检查玻璃抽屉后面确实透出照片而不是实色。
+    static var canvasPanY: CGFloat {
+        guard let index = args.firstIndex(of: "--pan-y"), args.indices.contains(index + 1),
+              let value = Double(args[index + 1]) else { return 0 }
+        return CGFloat(value)
+    }
+
     /// 预览用：直接以指定抽屉档位启动，方便检查不同高度下的排版。
     static var developDrawer: CGFloat {
         guard let index = args.firstIndex(of: "--drawer"), args.indices.contains(index + 1) else {

@@ -32,9 +32,9 @@ struct GradeScreen: View {
 
     @State private var showOriginal = false
     @State private var pressToken = 0
-    @State private var zoom: CGFloat = 1
-    @State private var pan: CGSize = .zero
-    @State private var lastPan: CGSize = .zero
+    @State private var zoom: CGFloat = DebugLaunch.canvasZoom
+    @State private var pan: CGSize = CGSize(width: 0, height: DebugLaunch.canvasPanY)
+    @State private var lastPan: CGSize = CGSize(width: 0, height: DebugLaunch.canvasPanY)
 
     @State private var curvePoints: [CGPoint] = [
         CGPoint(x: 0.0, y: 0.0),
@@ -211,6 +211,7 @@ struct GradeScreen: View {
                 Text("调色台")
                     .font(.navTitle)
                     .foregroundStyle(MColor.text1)
+                    .shadow(color: .black.opacity(0.75), radius: 3, y: 1)
                 HStack(spacing: 5) {
                     Circle().fill(MColor.brass).frame(width: 4, height: 4)
                     Text(entry == .handoff ? "显影交接 · 线性" : "原片直达 · 线性")
@@ -218,8 +219,12 @@ struct GradeScreen: View {
                     Text("ProPhoto RGB")
                 }
                 .mMeta(9, color: MColor.text3)
+                .shadow(color: .black.opacity(0.75), radius: 3, y: 1)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+
+            // 与显影台同一入口：预览分辨率档位始终可见，不随抽屉高度变化。
+            gradeScaleMenu
 
             MBrassPill(title: "导出", icon: "square.and.arrow.up", height: 32) {
                 withAnimation(MMotion.pill) { exportOpen = true }
@@ -227,6 +232,12 @@ struct GradeScreen: View {
         }
         .padding(.horizontal, 16)
         .frame(height: MMetric.navHeight)
+        // 顶栏按钮下面铺一层从上到下的黑色渐隐，保住标题与副标题的可读性，又不会像实色条一样截断照片。
+        .background(alignment: .top) {
+            MTopScrim(height: 190)
+                .offset(y: -insets.top)
+        }
+        .zIndex(1)
     }
 
     // MARK: - 预览
@@ -261,7 +272,7 @@ struct GradeScreen: View {
                         .foregroundStyle(MColor.text4)
                 }
             }
-            .clipped()
+            // 画布是整个页面：放大后的照片可以延伸到顶栏与抽屉下面，只由屏幕边界裁切。
             .opacity(imageRevealed ? 1 : 0)
             .contentShape(Rectangle())
             .onTapGesture(count: 2) {
@@ -328,7 +339,6 @@ struct GradeScreen: View {
             VStack {
                 HStack(alignment: .top, spacing: 6) {
                     Spacer()
-                    gradeScaleMenu
 
                     Button {
                         MHaptic.tick()
@@ -417,7 +427,7 @@ struct GradeScreen: View {
             .foregroundStyle(MColor.text3)
             .padding(.horizontal, 8)
             .frame(height: 24)
-            .background(Capsule().fill(Color.black.opacity(0.5)))
+            .mGlassSurface(Capsule(), fallbackFill: Color.black.opacity(0.5))
             .overlay(Capsule().strokeBorder(MColor.hairline, lineWidth: 1))
         }
         .accessibilityLabel("调色台预览渲染比例")
@@ -522,15 +532,12 @@ struct GradeScreen: View {
 
             toolbar
         }
+        // 抽屉是玻璃层：放大后的照片会从下面透出来，而不是被整块实色盖住。
         .background(
-            UnevenRoundedRectangle(
-                topLeadingRadius: MRadius.sheet,
-                bottomLeadingRadius: 0,
-                bottomTrailingRadius: 0,
-                topTrailingRadius: MRadius.sheet,
-                style: .continuous
-            )
-            .fill(MColor.surface1)
+            ZStack {
+                drawerShape.fill(.ultraThinMaterial)
+                drawerShape.fill(Color.black.opacity(0.30))
+            }
         )
         .overlay(alignment: .top) {
             UnevenRoundedRectangle(
@@ -988,9 +995,20 @@ struct GradeScreen: View {
             }
         }
         .padding(.horizontal, 8)
-        .padding(.bottom, insets.bottom)
-        .background(MColor.surface1)
+        // 与显影页一致：图标+文字整体在「分隔线→屏幕底」的完整栏高内垂直居中
+        //（内容高 46 = 图标区 22 + 间距 3 + 文字行 ~11 + 上下留白；栏高 46 + 底部安全区）
+        .frame(height: 46 + insets.bottom, alignment: .center)
         .overlay(alignment: .top) { MHairline() }
+    }
+
+    private var drawerShape: UnevenRoundedRectangle {
+        UnevenRoundedRectangle(
+            topLeadingRadius: MRadius.sheet,
+            bottomLeadingRadius: 0,
+            bottomTrailingRadius: 0,
+            topTrailingRadius: MRadius.sheet,
+            style: .continuous
+        )
     }
 
     /// 底部只放三个分页；导出由顶栏承担，避免同一动作出现两个入口。

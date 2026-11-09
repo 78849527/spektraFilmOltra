@@ -42,6 +42,26 @@ struct MHairline: View {
     }
 }
 
+/// 顶部黑色渐隐：铺在顶栏按钮下面，放大后的照片从控件下方经过时保住文字可读性，
+/// 又不会像实色条一样截断照片。调用方自行负责 offset(y: -insets.top) 顶到状态栏。
+struct MTopScrim: View {
+    var height: CGFloat = 170
+
+    var body: some View {
+        LinearGradient(
+            stops: [
+                .init(color: Color.black.opacity(0.72), location: 0),
+                .init(color: Color.black.opacity(0.34), location: 0.45),
+                .init(color: Color.clear, location: 1),
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+        .frame(height: height)
+        .allowsHitTesting(false)
+    }
+}
+
 struct MVerticalHairline: View {
     var color: Color = MColor.hairline
     var height: CGFloat = 18
@@ -366,58 +386,32 @@ struct MParamSlider: View {
     @State private var dragStartX: CGFloat = 0
 
     var body: some View {
-        // 行结构：左侧标签 + 下方滑轨；标签垂直居中在「上一条滑轨底边 → 本条滑轨顶边」的间距里，
-        // 所以上方留 10、标签与滑轨之间也留 10，不贴着上一条轨道。
-        VStack(alignment: .leading, spacing: 10) {
+        // 栅格化布局：每个单元 = 标签区 + 滑轨区，所有滑轨严格等间距。
+        // 标签在标签区内垂直居中 → 恰好落在「上一条滑轨 ↔ 自己这条滑轨」的正中间，水平左对齐。
+        // compact：单元 44（标签区 26 + 滑轨区 18）；常规：单元 52（30 + 22）。
+        VStack(spacing: 0) {
             HStack(spacing: 6) {
                 Text(label)
                     .font(.mSans(compact ? 11 : 12.5))
                     .foregroundStyle(isEnabled ? MColor.text2 : MColor.text4)
+                    .lineLimit(1)
                 Spacer(minLength: 8)
                 Text(text(for: value))
                     .font(.mSans(compact ? 9.5 : 10.5, .medium).monospacedDigit())
                     .foregroundStyle(isDirty ? MColor.brass : MColor.text3)
                     .contentTransition(.numericText())
+                    .lineLimit(1)
             }
-            .frame(height: 16, alignment: .leading)
+            // 实测校准：.mSans 行盒内字形比 frame 中心偏高 8pt，导致标签离上一条轨 14pt、
+            // 离自己的轨 30pt。下移 8pt 后字形视觉中心正好落在两轨连线中点，两侧等距。
+            .offset(y: 8)
+            .frame(height: labelZoneH, alignment: .leading)
 
-            GeometryReader { geo in
-                let width = max(geo.size.width, 1)
-                let ratio = normalized(value)
-                let knob: CGFloat = dragging
-                    ? (compact ? 19 : 22)
-                    : (compact ? 17 : 20)
-                let knobX = min(max(width * ratio - knob / 2, 0), max(0, width - knob))
-
-                ZStack(alignment: .leading) {
-                    Capsule()
-                        .fill(MColor.surface4)
-                        .frame(width: width, height: trackHeight)
-
-                    Capsule()
-                        .fill(isDirty ? MColor.brass.opacity(0.9) : Color.white.opacity(0.20))
-                        .frame(width: max(width * ratio, 0), height: trackHeight)
-
-                    Circle()
-                        .fill(Color(hex: 0xF1ECE3))
-                        .frame(width: knob, height: knob)
-                        .overlay(
-                            Circle().strokeBorder(Color.black.opacity(0.32), lineWidth: 1)
-                        )
-                        .shadow(color: .black.opacity(0.38), radius: compact ? 2 : 3, y: 1)
-                        // 命中区只围着圆点：轨道本身不接收拖动，列表滚动不会被滑条抢走。
-                        .frame(width: knob + 28, height: 44)
-                        .contentShape(Rectangle())
-                        .offset(x: knobX - 14)
-                        .allowsHitTesting(isEnabled)
-                        .gesture(dragGesture(width: width))
-                }
-                .frame(maxHeight: .infinity)
-            }
-            .frame(height: compact ? 24 : 30)
-            .opacity(isEnabled ? 1 : 0.4)
+            track
+                .frame(height: trackZoneH)
+                .opacity(isEnabled ? 1 : 0.4)
         }
-        .padding(.top, 10)
+        .frame(height: unitH)
         .animation(MMotion.quick, value: dragging)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(label)
@@ -435,6 +429,48 @@ struct MParamSlider: View {
             }
         }
     }
+
+    /// 滑轨行：底轨 + 已调进度 + 圆球，全部在行内垂直居中。
+    private var track: some View {
+        GeometryReader { geo in
+            let width = max(geo.size.width, 1)
+            let ratio = normalized(value)
+            let knob: CGFloat = dragging
+                ? (compact ? 19 : 22)
+                : (compact ? 17 : 20)
+            let knobX = min(max(width * ratio - knob / 2, 0), max(0, width - knob))
+
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(MColor.surface4)
+                    .frame(width: width, height: trackHeight)
+
+                Capsule()
+                    .fill(isDirty ? MColor.brass.opacity(0.9) : Color.white.opacity(0.20))
+                    .frame(width: max(width * ratio, 0), height: trackHeight)
+
+                Circle()
+                    .fill(Color(hex: 0xF1ECE3))
+                    .frame(width: knob, height: knob)
+                    .overlay(
+                        Circle().strokeBorder(Color.black.opacity(0.32), lineWidth: 1)
+                    )
+                    .shadow(color: .black.opacity(0.38), radius: compact ? 2 : 3, y: 1)
+                    // 命中区只围着圆点：轨道本身不接收拖动，列表滚动不会被滑条抢走。
+                    .frame(width: knob + 28, height: 36)
+                    .contentShape(Rectangle())
+                    .offset(x: knobX - 14)
+                    .allowsHitTesting(isEnabled)
+                    .gesture(dragGesture(width: width))
+            }
+            .frame(maxHeight: .infinity)
+        }
+    }
+
+    // 栅格常量：标签区（上一轨到本轨间距的一半处放标签）、滑轨区。
+    private var labelZoneH: CGFloat { compact ? 26 : 30 }
+    private var trackZoneH: CGFloat { compact ? 18 : 22 }
+    private var unitH: CGFloat { labelZoneH + trackZoneH }
 
     /// 相对拖动：记录按下锚点，之后只用位移增量换算，永远不会「碰到就跳值」。
     private func dragGesture(width: CGFloat) -> some Gesture {
