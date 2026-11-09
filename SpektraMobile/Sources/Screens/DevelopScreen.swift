@@ -57,7 +57,7 @@ struct DevelopScreen: View {
                             GeometryReader { geo in
                                 Color.clear
                                     .onAppear { stageSize = geo.size }
-                                    .onChange(of: geo.size) { _, newValue in stageSize = newValue }
+                                    .onChange(of: geo.size) { newValue in stageSize = newValue }
                             }
                         )
                     floatingChrome
@@ -107,8 +107,8 @@ struct DevelopScreen: View {
                 )
             }
         }
-        .onChange(of: stageSize) { _, _ in popCardIfReady() }
-        .onChange(of: session.previewImage != nil) { _, hasImage in
+        .onChange(of: stageSize) { _ in popCardIfReady() }
+        .onChange(of: session.previewImage != nil) { hasImage in
             if hasImage { popCardIfReady() }
         }
     }
@@ -471,7 +471,7 @@ struct DevelopScreen: View {
             .background(
                 GeometryReader { proxy in
                     Color.clear
-                        .onChange(of: proxy.size.height, initial: true) { _, height in
+                        .onChange(of: proxy.size.height, initial: true) { height in
                             panelViewportHeight = height
                             if drawerChrome == 0, height > 0 {
                                 drawerChrome = max(0, drawerHeight - height)
@@ -486,23 +486,11 @@ struct DevelopScreen: View {
             tabBar
         }
         .background(
-            UnevenRoundedRectangle(
-                topLeadingRadius: MRadius.sheet,
-                bottomLeadingRadius: 0,
-                bottomTrailingRadius: 0,
-                topTrailingRadius: MRadius.sheet,
-                style: .continuous
-            )
+            MTopRoundedRectangle(radius: MRadius.sheet)
             .fill(MColor.surface1)
         )
         .overlay(alignment: .top) {
-            UnevenRoundedRectangle(
-                topLeadingRadius: MRadius.sheet,
-                bottomLeadingRadius: 0,
-                bottomTrailingRadius: 0,
-                topTrailingRadius: MRadius.sheet,
-                style: .continuous
-            )
+            MTopRoundedRectangle(radius: MRadius.sheet)
             .strokeBorder(MColor.hairlineStrong, lineWidth: 1)
             .allowsHitTesting(false)
         }
@@ -519,7 +507,7 @@ struct DevelopScreen: View {
             panelContentHeight = height
             syncDrawerToContent()
         }
-        .onChange(of: panelViewportHeight) { _, _ in
+        .onChange(of: panelViewportHeight) { _ in
             syncDrawerToContent()
         }
     }
@@ -1260,17 +1248,17 @@ struct MExportSheet: View {
             GeometryReader { proxy in
                 Color.clear
                     .onAppear { contentHeight = proxy.size.height }
-                    .onChange(of: proxy.size.height) { _, height in contentHeight = height }
+                    .onChange(of: proxy.size.height) { height in contentHeight = height }
             }
         )
         // 内容本身已含底部安全区 padding，这里只留一点上边距，避免面板底部出现一大块空白。
         .presentationDetents([.height(min(640, max(340, contentHeight + 12)))])
         .presentationDragIndicator(.visible)
         .presentationBackground(MColor.surface1)
-        .onChange(of: format) { _, _ in resetPhaseAfterOptionChange() }
-        .onChange(of: longEdge) { _, _ in resetPhaseAfterOptionChange() }
+        .onChange(of: format) { _ in resetPhaseAfterOptionChange() }
+        .onChange(of: longEdge) { _ in resetPhaseAfterOptionChange() }
         // 截图验收：等原片读完再自动开跑导出（原片没读完时 export 会以 .busy 立刻失败）
-        .onChange(of: canExport) { _, ready in
+        .onChange(of: canExport) { ready in
             guard ready, DebugLaunch.exportAutoStart, phase == .idle else { return }
             beginExport()
         }
