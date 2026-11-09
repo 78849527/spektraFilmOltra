@@ -41,7 +41,7 @@ struct HomeScreen: View {
             }
         }
         .background(MColor.app)
-        .onChange(of: pickedItems) { _, items in
+        .onChange(of: pickedItems) { items in
             guard !items.isEmpty else { return }
             let batch = items
             pickedItems = []
@@ -460,22 +460,10 @@ struct HomeScreen: View {
             }
             .background(MColor.surface1)
             .clipShape(
-                UnevenRoundedRectangle(
-                    topLeadingRadius: MRadius.sheet,
-                    bottomLeadingRadius: 0,
-                    bottomTrailingRadius: 0,
-                    topTrailingRadius: MRadius.sheet,
-                    style: .continuous
-                )
+                MTopRoundedRectangle(radius: MRadius.sheet)
             )
             .overlay(alignment: .top) {
-                UnevenRoundedRectangle(
-                    topLeadingRadius: MRadius.sheet,
-                    bottomLeadingRadius: 0,
-                    bottomTrailingRadius: 0,
-                    topTrailingRadius: MRadius.sheet,
-                    style: .continuous
-                )
+                MTopRoundedRectangle(radius: MRadius.sheet)
                 .strokeBorder(MColor.hairlineStrong, lineWidth: 1)
             }
             .transition(.move(edge: .bottom))
