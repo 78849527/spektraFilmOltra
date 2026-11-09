@@ -67,7 +67,7 @@ struct GradeScreen: View {
                         GeometryReader { geo in
                             Color.clear
                                 .onAppear { stageSize = geo.size }
-                                .onChange(of: geo.size) { _, newValue in stageSize = newValue }
+                                .onChange(of: geo.size) { newValue in stageSize = newValue }
                         }
                     )
                 Spacer(minLength: 0)
@@ -110,14 +110,14 @@ struct GradeScreen: View {
                 label: "显影中"
             )
         }
-        .onChange(of: stageSize) { _, _ in popCardIfReady() }
-        .onChange(of: session.previewImage != nil) { _, hasImage in
+        .onChange(of: stageSize) { _ in popCardIfReady() }
+        .onChange(of: session.previewImage != nil) { hasImage in
             if hasImage { popCardIfReady() }
         }
-        .onChange(of: recipe) { _, newValue in
+        .onChange(of: recipe) { newValue in
             session.apply(newValue)
         }
-        .onChange(of: curvePoints) { _, _ in
+        .onChange(of: curvePoints) { _ in
             syncCurve()
         }
         .fileImporter(
@@ -510,7 +510,7 @@ struct GradeScreen: View {
             .background(
                 GeometryReader { proxy in
                     Color.clear
-                        .onChange(of: proxy.size.height, initial: true) { _, height in
+                        .onChange(of: proxy.size.height, initial: true) { height in
                             panelViewportHeight = height
                             if drawerChrome == 0, height > 0 {
                                 drawerChrome = max(0, drawerHeight - height)
@@ -523,23 +523,11 @@ struct GradeScreen: View {
             toolbar
         }
         .background(
-            UnevenRoundedRectangle(
-                topLeadingRadius: MRadius.sheet,
-                bottomLeadingRadius: 0,
-                bottomTrailingRadius: 0,
-                topTrailingRadius: MRadius.sheet,
-                style: .continuous
-            )
+            MTopRoundedRectangle(radius: MRadius.sheet)
             .fill(MColor.surface1)
         )
         .overlay(alignment: .top) {
-            UnevenRoundedRectangle(
-                topLeadingRadius: MRadius.sheet,
-                bottomLeadingRadius: 0,
-                bottomTrailingRadius: 0,
-                topTrailingRadius: MRadius.sheet,
-                style: .continuous
-            )
+            MTopRoundedRectangle(radius: MRadius.sheet)
             .strokeBorder(MColor.hairlineStrong, lineWidth: 1)
             .allowsHitTesting(false)
         }
@@ -548,7 +536,7 @@ struct GradeScreen: View {
             panelContentHeight = height
             syncDrawerToContent()
         }
-        .onChange(of: panelViewportHeight) { _, _ in
+        .onChange(of: panelViewportHeight) { _ in
             syncDrawerToContent()
         }
     }
