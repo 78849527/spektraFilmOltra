@@ -2,7 +2,7 @@ name: SpektraMobile
 options:
   bundleIdPrefix: com.spektrafilm
   deploymentTarget:
-    iOS: "17.0"
+    iOS: "16.5"
   createIntermediateGroups: true
 settings:
   base:
