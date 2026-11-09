@@ -377,7 +377,6 @@ struct MParamSlider: View {
                 Text(text(for: value))
                     .font(.mSans(compact ? 9.5 : 10.5, .medium).monospacedDigit())
                     .foregroundStyle(isDirty ? MColor.brass : MColor.text3)
-                    .contentTransition(.numericText())
             }
             .frame(height: 16, alignment: .leading)
 
