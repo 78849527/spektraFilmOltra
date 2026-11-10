@@ -1,5 +1,6 @@
 import SwiftUI
 import PhotosUI
+import Photos
 import UniformTypeIdentifiers
 
 struct HomeScreen: View {
@@ -12,6 +13,7 @@ struct HomeScreen: View {
     @State private var sortMode: HomeSort = .recent
     @State private var actionPhoto: MPhoto?
     @State private var pickedItems: [PhotosPickerItem] = []
+    @State private var showRawFileImporter = false
     @State private var didDebugOpen = false
     @State private var searchOpen = false
     @State private var query = ""
@@ -41,6 +43,18 @@ struct HomeScreen: View {
             }
         }
         .background(MColor.app)
+        .fileImporter(
+            isPresented: $showRawFileImporter,
+            allowedContentTypes: Self.rawImportTypes,
+            allowsMultipleSelection: true
+        ) { result in
+            switch result {
+            case .success(let urls):
+                importRawFiles(urls)
+            case .failure:
+                onToast("未能读取所选 RAW 文件")
+            }
+        }
         .onChange(of: pickedItems) { items in
             guard !items.isEmpty else { return }
             let batch = items
@@ -58,36 +72,59 @@ struct HomeScreen: View {
 
     // MARK: - 顶部
 
-    /// 相册选择结果落到临时文件再入库：`LibraryStore` 只接受带扩展名的 RAW。
+    /// 文件 App 导入原始 RAW；相册入口则读取所选资源的原始 RAW 文件，避免 PhotosPicker 返回预览 JPEG。
+    private static let rawImportTypes: [UTType] = ImageLoader.rawSuffixes
+        .sorted()
+        .compactMap { UTType(filenameExtension: $0) }
+
+    private func importRawFiles(_ urls: [URL]) {
+        let report = engine.importPhotos(urls)
+        if report.imported > 0 {
+            onToast("已导入 \(report.imported) 张")
+        } else {
+            onToast(report.reason.isEmpty ? "仅支持 RAW 文件" : report.reason)
+        }
+    }
+
     private func importPicked(_ items: [PhotosPickerItem]) async {
+        let status = await requestPhotoLibraryAccess()
+        guard status == .authorized || status == .limited else {
+            onToast("需要允许访问照片图库，才能读取 Apple ProRAW 原片")
+            return
+        }
+
         var urls: [URL] = []
         for item in items {
-            guard let data = try? await item.loadTransferable(type: Data.self) else { continue }
-            // 相册对 ProRAW 报的 UTI 不一定带 raw 族（实测同一台机器上，
-            // 13 Pro Max 的 DNG 会被报成 `public.tiff`，16 的报成 DNG）。
-            // 于是先用 UTI 取扩展名，再按文件头兜底：TIFF 家族（II*\0 / MM\0*）一律按 dng 落盘。
-            let rawType = item.supportedContentTypes.first(where: { $0.conforms(to: .rawImage) })
-            var ext = rawType?.preferredFilenameExtension
-                ?? item.supportedContentTypes.first?.preferredFilenameExtension
-                ?? "dng"
-            if rawType == nil, Self.looksLikeTIFF(data), !ImageLoader.rawSuffixes.contains(ext.lowercased()) {
-                ext = "dng"
-            }
-            NSLog("MImport types=%@ ext=%@ bytes=%d magic=%@",
-                  item.supportedContentTypes.map(\.identifier).joined(separator: ","),
-                  ext, data.count, Self.magicHex(data))
+            guard let identifier = item.itemIdentifier else { continue }
+            let assets = PHAsset.fetchAssets(withLocalIdentifiers: [identifier], options: nil)
+            guard let asset = assets.firstObject else { continue }
+            let resources = PHAssetResource.assetResources(for: asset)
+            guard let raw = resources.first(where: Self.isRawResource) else { continue }
+
+            let ext = URL(fileURLWithPath: raw.originalFilename).pathExtension.lowercased()
+            guard !ext.isEmpty else { continue }
             let url = FileManager.default.temporaryDirectory
                 .appendingPathComponent(UUID().uuidString)
                 .appendingPathExtension(ext)
             do {
-                try data.write(to: url)
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                    PHAssetResourceManager.default().writeData(for: raw, toFile: url, options: nil) { error in
+                        if let error {
+                            continuation.resume(throwing: error)
+                        } else {
+                            continuation.resume(returning: ())
+                        }
+                    }
+                }
                 urls.append(url)
             } catch {
-                continue
+                try? FileManager.default.removeItem(at: url)
+                NSLog("MImport RAW resource failed: %@", (error as NSError).localizedDescription)
             }
         }
+
         guard !urls.isEmpty else {
-            onToast("相册里没有可导入的 RAW")
+            onToast("没有找到 RAW 原片。普通照片不支持；可从文件 App 导入 .DNG 等 RAW 文件")
             return
         }
         let report = engine.importPhotos(urls)
@@ -99,15 +136,18 @@ struct HomeScreen: View {
         }
     }
 
-    private static func looksLikeTIFF(_ data: Data) -> Bool {
-        guard data.count >= 4 else { return false }
-        let head = Array(data.prefix(4))
-        return (head[0] == 0x49 && head[1] == 0x49 && head[2] == 0x2A && head[3] == 0x00)
-            || (head[0] == 0x4D && head[1] == 0x4D && head[2] == 0x00 && head[3] == 0x2A)
+    private func requestPhotoLibraryAccess() async -> PHAuthorizationStatus {
+        await withCheckedContinuation { continuation in
+            PHPhotoLibrary.requestAuthorization(for: .readWrite) { status in
+                continuation.resume(returning: status)
+            }
+        }
     }
 
-    private static func magicHex(_ data: Data) -> String {
-        data.prefix(4).map { String(format: "%02X", $0) }.joined()
+    private static func isRawResource(_ resource: PHAssetResource) -> Bool {
+        let ext = URL(fileURLWithPath: resource.originalFilename).pathExtension.lowercased()
+        if ImageLoader.rawSuffixes.contains(ext) { return true }
+        return UTType(resource.uniformTypeIdentifier)?.conforms(to: .rawImage) == true
     }
 
     private var header: some View {
@@ -328,6 +368,19 @@ struct HomeScreen: View {
                     sortMode = sortMode == .recent ? .filename : .recent
                 }
             }
+
+            Button {
+                showRawFileImporter = true
+            } label: {
+                Image(systemName: "folder")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(MColor.text2)
+                    .frame(width: 42, height: 42)
+                    .background(Circle().fill(MColor.surface1))
+                    .overlay(Circle().strokeBorder(MColor.hairline, lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("从文件导入 RAW")
 
             PhotosPicker(
                 selection: $pickedItems,

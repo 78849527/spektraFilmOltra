@@ -24,6 +24,8 @@
 	<true/>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>从照片图库读取 Apple ProRAW 原片以导入显影。</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>导出成片会保存到系统相册，方便直接在照片 App 里查看与分享。</string>
 	<key>UIFileSharingEnabled</key>
